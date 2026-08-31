@@ -10,10 +10,11 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  audioplayers: ^6.0.0
-  cupertino_icons: ^1.0.8
   just_audio: ^0.9.36
+  path_provider: ^2.1.0
+  cupertino_icons: ^1.0.8
   file_picker: ^12.1.2
+  flutter_taglib: ^1.5.2   # <--- Nuevo
 
 dev_dependencies:
   flutter_test:

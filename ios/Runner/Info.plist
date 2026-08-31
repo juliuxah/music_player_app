@@ -26,6 +26,24 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+
+	<!-- ========== NUEVAS CLAVES PARA ARCHIVOS Y AUDIO ========== -->
+	<!-- Permite al usuario ver los archivos de la app en iTunes/Finder -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<!-- Permite abrir archivos en su ubicación original (evita copias) -->
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<!-- Permite la reproducción en segundo plano -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
+	<!-- Descripción requerida para acceder a la biblioteca de música (aunque no se usa) -->
+	<key>NSAppleMusicUsageDescription</key>
+	<string>Esta app necesita acceso a tu música para reproducir archivos de audio.</string>
+	<!-- ======================================================== -->
+
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
