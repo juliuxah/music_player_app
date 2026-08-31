@@ -15,6 +15,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   file_picker: ^12.1.2
   flutter_taglib: ^1.5.2   # <--- Nuevo
+  shared_preferences: ^2.2.2
+  palette_generator: ^0.3.3+3
 
 dev_dependencies:
   flutter_test:
