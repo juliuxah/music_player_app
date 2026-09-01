@@ -2,7 +2,7 @@ name: music_player_app
 description: "A new Flutter project."
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: ^3.13.2
@@ -27,7 +27,7 @@ dependencies:
   screenshot: ^3.0.0      # Para capturar el widget como imagen
   share_plus: ^13.3.0
   flutter_launcher_icons: ^0.13.1
-  package_info_plus: ^8.0.0 # Para saber qué versión tiene el usuario instalada
+  package_info_plus: 10.2.1 # Para saber qué versión tiene el usuario instalada
   url_launcher: ^6.2.5
 
 
