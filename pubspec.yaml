@@ -17,6 +17,8 @@ dependencies:
   flutter_taglib: ^1.5.2   # <--- Nuevo
   shared_preferences: ^2.2.2
   palette_generator: ^0.3.3+3
+  audio_service: ^0.18.15
+  taglib_ffi: ^0.1.0
 
 dev_dependencies:
   flutter_test:
