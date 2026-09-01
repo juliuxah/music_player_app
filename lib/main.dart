@@ -22,7 +22,6 @@ late MyAudioHandler audioHandler;
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Limpiar cookies temporalmente para resetear el bloqueo del WebView
   CookieManager cookieManager = CookieManager.instance();
   await cookieManager.deleteAllCookies();
 
@@ -45,7 +44,21 @@ class MyAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   final AudioPlayer _player = AudioPlayer();
 
   MyAudioHandler() {
+    _initAudioPlayerStreams();
+  }
+
+  void _initAudioPlayerStreams() {
     _player.playbackEventStream.map(_transformEvent).pipe(playbackState);
+    _player.processingStateStream.listen((state) {
+      if (state == ProcessingState.completed) {
+        _onSongCompleted?.call();
+      }
+    });
+  }
+
+  static VoidCallback? _onSongCompleted;
+  static set onSongCompleted(VoidCallback callback) {
+    _onSongCompleted = callback;
   }
 
   AudioPlayer get player => _player;
@@ -56,6 +69,7 @@ class MyAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         MediaControl.skipToPrevious,
         _player.playing ? MediaControl.pause : MediaControl.play,
         MediaControl.skipToNext,
+        MediaControl.stop,
       ],
       systemActions: const {
         MediaAction.seek,
@@ -90,7 +104,6 @@ class MyAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   @override
   Future<void> stop() async {
     await _player.stop();
-    await super.stop();
   }
 
   void updateCurrentMetadata({
@@ -98,9 +111,10 @@ class MyAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
     required String artist,
     required String artUri,
     required String album,
+    required String filePath,
   }) {
     mediaItem.add(MediaItem(
-      id: artUri,
+      id: filePath,  // Cambiado: ahora es la ruta del archivo
       album: album,
       title: title,
       artist: artist,
@@ -200,7 +214,7 @@ class FlacDownloadService {
 }
 
 // ---------------------------------------------------------
-// PANTALLA DE NAVEGACIÓN WEB CON EXTRACCIÓN ROBUSTA DE BLOB
+// PANTALLA DE NAVEGACIÓN WEB
 // ---------------------------------------------------------
 class FlacWebBrowserScreen extends StatefulWidget {
   final Function(File flacFile) onDownloadComplete;
@@ -612,7 +626,10 @@ class AlbumCollectionScreen extends StatefulWidget {
   State<AlbumCollectionScreen> createState() => _AlbumCollectionScreenState();
 }
 
-class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> {
+class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with WidgetsBindingObserver {
+
+  MediaItem? _currentMediaItem;
+
   late final PageController _pageController;
   final GlobalKey _shareCardKey = GlobalKey();
 
@@ -633,8 +650,8 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _pageController = PageController(viewportFraction: 0.5, initialPage: 0);
-    // Añade esta línea aquí:
     checkForUpdates(context);
 
     _audioPlayer.setVolume(_volume);
@@ -654,16 +671,83 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> {
         setState(() {
           _isPlaying = state.playing;
         });
-
-        if (state.processingState == ProcessingState.completed) {
-          _playNextSongAutomatically();
-        }
       }
     });
 
+    MyAudioHandler.onSongCompleted = _playNextSongAutomatically;
+
     _initAppStartup();
+
+    Future.delayed(Duration.zero, () {
+      _resumePlaybackIfNeeded();
+    });
+
+    audioHandler.mediaItem.listen((mediaItem) {
+      if (mediaItem == null || !mounted) return;
+      _currentMediaItem = mediaItem;
+      _updateCurrentSongFromMediaItem(mediaItem);
+    });
   }
 
+  void _updateCurrentSongFromMediaItem(MediaItem mediaItem) {
+    for (int albumIdx = 0; albumIdx < albumList.length; albumIdx++) {
+      final album = albumList[albumIdx];
+      for (int songIdx = 0; songIdx < album.songs.length; songIdx++) {
+        final song = album.songs[songIdx];
+        if (song['filePath'] == mediaItem.id) {
+          setState(() {
+            _currentPlayingAlbumIndex = albumIdx;
+            _currentSongInAlbumIndex = songIdx;
+            _currentAudioPath = song['filePath'];
+          });
+
+          // Mover el PageView al álbum que está sonando actualmente
+          if (_pageController.hasClients && _getCurrentPageIndex() != albumIdx) {
+            _pageController.animateToPage(
+              albumIdx,
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeInOut,
+            );
+          }
+          return;
+        }
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Sincronizar UI con la reproducción activa
+      if (audioHandler.mediaItem.value != null) {
+        _updateCurrentSongFromMediaItem(audioHandler.mediaItem.value!);
+      }
+    }
+  }
+
+  void _resumePlaybackIfNeeded() {
+    if (_currentAudioPath != null && _currentPlayingAlbumIndex != -1) {
+      if (!_audioPlayer.playing) {
+        if (_audioPlayer.playerState.processingState != ProcessingState.idle) {
+          _audioPlayer.play();
+          setState(() => _isPlaying = true);
+        } else {
+          _playSongInAlbum(_currentPlayingAlbumIndex, _currentSongInAlbumIndex);
+        }
+      }
+    }
+  }
+
+  // ------------------------------------------------------------
+  // Métodos existentes (todos implementados)
+  // ------------------------------------------------------------
   Future<void> _initAppStartup() async {
     await _loadSavedAlbums();
     await _cleanOrphanedSongs();
@@ -989,8 +1073,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> {
       String songArtist = song['artist'] ?? album.artist;
 
       if (path.isNotEmpty && File(path).existsSync()) {
-        await _audioPlayer.stop();
-
         setState(() {
           _currentPlayingAlbumIndex = albumIndex;
           _currentSongInAlbumIndex = songIndex;
@@ -1002,9 +1084,12 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> {
         audioHandler.updateCurrentMetadata(
           title: songTitle,
           artist: songArtist,
-          artUri: album.image,
+          artUri: album.image,          // Para la portada
           album: album.title,
+          filePath: path,
         );
+
+        await _audioPlayer.setVolume(_volume);
 
         await _audioPlayer.setAudioSource(
           AudioSource.file(path),
@@ -1015,32 +1100,79 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> {
 
         if (mounted) {
           setState(() {
-            _isPlaying = true;
+            _isPlaying = _audioPlayer.playing;
           });
         }
       } else {
         debugPrint('El archivo de audio no existe en la ruta: $path');
+        _playNextSongAutomatically();
       }
     } catch (e) {
       debugPrint('Error al reproducir audio: $e');
+      if (mounted) {
+        setState(() => _isPlaying = false);
+      }
     }
   }
 
   Future<void> _playNextSongAutomatically() async {
-    if (_currentPlayingAlbumIndex == -1 || albumList.isEmpty) return;
+    if (albumList.isEmpty) return;
 
-    final currentAlbum = albumList[_currentPlayingAlbumIndex];
+    // Obtener la canción actual desde la metadata de audio_service o del estado local
+    final currentMediaItem = audioHandler.mediaItem.value;
+    int currentAlbumIdx = _currentPlayingAlbumIndex;
+    int currentSongIdx = _currentSongInAlbumIndex;
 
-    if (_currentSongInAlbumIndex < currentAlbum.songs.length - 1) {
-      await _playSongInAlbum(_currentPlayingAlbumIndex, _currentSongInAlbumIndex + 1);
-    } else if (_currentPlayingAlbumIndex < albumList.length - 1) {
-      await _playSongInAlbum(_currentPlayingAlbumIndex + 1, 0);
-    } else {
+    // Si tenemos el id (filePath) en el mediaItem, aseguramos encontrar la posición exacta
+    if (currentMediaItem != null) {
+      for (int a = 0; a < albumList.length; a++) {
+        for (int s = 0; s < albumList[a].songs.length; s++) {
+          if (albumList[a].songs[s]['filePath'] == currentMediaItem.id) {
+            currentAlbumIdx = a;
+            currentSongIdx = s;
+            break;
+          }
+        }
+      }
+    }
+
+    if (currentAlbumIdx == -1) return;
+
+    final currentAlbum = albumList[currentAlbumIdx];
+
+    // 1. Si hay más canciones en el MISMO álbum, reproducir la siguiente
+    if (currentSongIdx + 1 < currentAlbum.songs.length) {
+      await _playSongInAlbum(currentAlbumIdx, currentSongIdx + 1);
+    }
+    // 2. Si se acabaron las canciones de este álbum, pasar al SIGUIENTE álbum que tenga canciones
+    else if (currentAlbumIdx + 1 < albumList.length) {
+      int nextAlbumIndex = currentAlbumIdx + 1;
+
+      while (nextAlbumIndex < albumList.length && albumList[nextAlbumIndex].songs.isEmpty) {
+        nextAlbumIndex++;
+      }
+
+      if (nextAlbumIndex < albumList.length) {
+        await _playSongInAlbum(nextAlbumIndex, 0);
+      } else {
+        await _audioPlayer.stop();
+        if (mounted) {
+          setState(() {
+            _isPlaying = false;
+            _currentSongInAlbumIndex = -1;
+          });
+        }
+      }
+    }
+    // 3. Fin de la biblioteca
+    else {
       await _audioPlayer.stop();
-      setState(() {
-        _isPlaying = false;
-        _currentSongInAlbumIndex = -1;
-      });
+      if (mounted) {
+        setState(() {
+          _isPlaying = false;
+          _currentSongInAlbumIndex = -1;
+        });
+      }
     }
   }
 
@@ -1501,9 +1633,8 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> {
                             _currentPlayingAlbumIndex == albumIndex && _currentSongInAlbumIndex == idx;
                         final int trackNum = song['track'] ?? 0;
 
-                        // Corregido: Se utiliza directamente un contenedor estilizado para evitar el warning del ColoredBox/ListTile
-                        return Container(
-                          color: const Color(0xFF161618),
+                        return Material(
+                          color: Colors.transparent,
                           child: ListTile(
                             key: ValueKey(song['filePath'] ?? idx),
                             dense: true,
@@ -1612,12 +1743,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> {
     final minutes = remaining.inMinutes.remainder(60);
     final seconds = twoDigits(remaining.inSeconds.remainder(60));
     return '-$minutes:$seconds';
-  }
-
-  @override
-  void dispose() {
-    _pageController.dispose();
-    super.dispose();
   }
 
   Widget _buildAlbumImage(String imageSource) {
@@ -1735,8 +1860,9 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> {
     int activeIndex = albumList.isEmpty ? 0 : _getCurrentPageIndex();
     AlbumModel? activeAlbum = albumList.isNotEmpty ? albumList[activeIndex] : null;
 
-    String currentTitle = '';
-    String currentArtist = '';
+    // --- INICIO: LÓGICA MODIFICADA PARA MOSTRAR SOLO LA CANCIÓN EN REPRODUCCIÓN ---
+    String currentTitle = 'Sin canción';
+    String currentArtist = 'Desconocido';
     String currentAlbumName = '';
     String currentImage = '';
 
@@ -1745,16 +1871,12 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> {
         _currentPlayingAlbumIndex < albumList.length &&
         _currentSongInAlbumIndex < albumList[_currentPlayingAlbumIndex].songs.length) {
       final currentSong = albumList[_currentPlayingAlbumIndex].songs[_currentSongInAlbumIndex];
-      currentTitle = currentSong['title'] ?? '';
+      currentTitle = currentSong['title'] ?? 'Sin título';
       currentArtist = currentSong['artist'] ?? albumList[_currentPlayingAlbumIndex].artist;
       currentAlbumName = albumList[_currentPlayingAlbumIndex].title;
       currentImage = albumList[_currentPlayingAlbumIndex].image;
-    } else if (activeAlbum != null) {
-      currentTitle = activeAlbum.title;
-      currentArtist = activeAlbum.artist;
-      currentAlbumName = activeAlbum.title;
-      currentImage = activeAlbum.image;
     }
+    // --- FIN: ya no se usan los datos del álbum activo ---
 
     final double maxDurationMs = _duration.inMilliseconds.toDouble();
     final double currentPositionMs = _isSeeking
@@ -1926,7 +2048,7 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              currentTitle.isNotEmpty ? currentTitle : 'Sin canción',
+                              currentTitle,
                               style: const TextStyle(
                                 fontSize: 21,
                                 fontWeight: FontWeight.bold,
@@ -1938,7 +2060,7 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              currentArtist.isNotEmpty ? currentArtist : 'Desconocido',
+                              currentArtist,
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w400,
@@ -1949,23 +2071,24 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> {
                               overflow: TextOverflow.ellipsis,
                             ),
                             const SizedBox(height: 2),
-                            Text(
-                              currentAlbumName.isNotEmpty ? 'From: "$currentAlbumName"' : '',
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w400,
-                                color: Colors.white.withOpacity(0.45),
+                            if (currentAlbumName.isNotEmpty)
+                              Text(
+                                'From: "$currentAlbumName"',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w400,
+                                  color: Colors.white.withOpacity(0.45),
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
                           ],
                         ),
                       ),
                       const SizedBox(width: 12),
                       IconButton(
                         icon: const Icon(Icons.share_rounded, color: Colors.white, size: 24),
-                        onPressed: albumList.isEmpty
+                        onPressed: albumList.isEmpty || currentTitle == 'Sin canción'
                             ? null
                             : () {
                           _showShareSongCard(
