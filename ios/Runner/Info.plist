@@ -27,11 +27,18 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 
-	<!-- ========== NUEVAS CLAVES PARA ARCHIVOS Y AUDIO ========== -->
-	<!-- Permite al usuario ver los archivos de la app en iTunes/Finder -->
+	<!-- ========== ARCHIVOS, RED Y AUDIO EN SEGUNDO PLANO ========== -->
+	<!-- Permite peticiones de red (HTTP/HTTPS) en el WebView -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+
+	<!-- Permite al usuario ver los archivos de la app en la app Archivos de iOS / Finder -->
 	<key>UIFileSharingEnabled</key>
 	<true/>
-	<!-- Permite abrir archivos en su ubicación original (evita copias) -->
+	<!-- Permite abrir archivos en su ubicación original -->
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<!-- Permite la reproducción en segundo plano -->
@@ -39,7 +46,7 @@
 	<array>
 		<string>audio</string>
 	</array>
-	<!-- Descripción requerida para acceder a la biblioteca de música (aunque no se usa) -->
+	<!-- Descripción requerida para acceder a la biblioteca de música -->
 	<key>NSAppleMusicUsageDescription</key>
 	<string>Esta app necesita acceso a tu música para reproducir archivos de audio.</string>
 	<!-- ======================================================== -->

@@ -19,6 +19,15 @@ dependencies:
   palette_generator: ^0.3.3+3
   audio_service: ^0.18.15
   taglib_ffi: ^0.1.0
+  http: ^1.2.0
+  archive: ^3.6.0
+  path: ^1.9.0
+  permission_handler: ^11.3.0
+  flutter_inappwebview: ^6.1.5
+  screenshot: ^3.0.0      # Para capturar el widget como imagen
+  share_plus: ^13.3.0
+  flutter_launcher_icons: ^0.13.1
+
 
 dev_dependencies:
   flutter_test:
@@ -27,3 +36,13 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  assets:
+    - assets/ojo.gif
+
+flutter_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/icon/app_icon.png"
+  # Opcional: Si quieres un color de fondo específico para el ícono adaptativo en Android
+  # background_color: "#000000"
