@@ -27,6 +27,8 @@ dependencies:
   screenshot: ^3.0.0      # Para capturar el widget como imagen
   share_plus: ^13.3.0
   flutter_launcher_icons: ^0.13.1
+  package_info_plus: ^8.0.0 # Para saber qué versión tiene el usuario instalada
+  url_launcher: ^6.2.5
 
 
 dev_dependencies:

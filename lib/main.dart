@@ -15,6 +15,7 @@ import 'package:path/path.dart' as p;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:screenshot/screenshot.dart';
 import 'package:share_plus/share_plus.dart';
+import 'update_service.dart';
 
 late MyAudioHandler audioHandler;
 
@@ -633,6 +634,8 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> {
   void initState() {
     super.initState();
     _pageController = PageController(viewportFraction: 0.5, initialPage: 0);
+    // Añade esta línea aquí:
+    checkForUpdates(context);
 
     _audioPlayer.setVolume(_volume);
 
