@@ -16,11 +16,17 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:screenshot/screenshot.dart';
 import 'package:share_plus/share_plus.dart';
 import 'update_service.dart';
+import 'package:audio_session/audio_session.dart';
 
 late MyAudioHandler audioHandler;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Configurar AudioSession para iOS / Android
+  final session = await AudioSession.instance;
+  await session.configure(const AudioSessionConfiguration.music());
+  await session.setActive(true);
 
   CookieManager cookieManager = CookieManager.instance();
   await cookieManager.deleteAllCookies();
@@ -656,6 +662,30 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
 
     _audioPlayer.setVolume(_volume);
 
+    // Escuchar el cambio de índice nativo (funciona perfecto en segundo plano en iOS)
+    _audioPlayer.currentIndexStream.listen((index) {
+      if (index != null &&
+          _currentPlayingAlbumIndex != -1 &&
+          _currentPlayingAlbumIndex < albumList.length) {
+        final album = albumList[_currentPlayingAlbumIndex];
+        if (index < album.songs.length) {
+          final song = album.songs[index];
+          setState(() {
+            _currentSongInAlbumIndex = index;
+            _currentAudioPath = song['filePath'];
+          });
+
+          audioHandler.updateCurrentMetadata(
+            title: song['title'] ?? 'Sin título',
+            artist: song['artist'] ?? album.artist,
+            artUri: album.image,
+            album: album.title,
+            filePath: song['filePath'] ?? '',
+          );
+        }
+      }
+    });
+
     _audioPlayer.durationStream.listen((d) {
       if (mounted) setState(() => _duration = d ?? Duration.zero);
     });
@@ -672,9 +702,14 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
           _isPlaying = state.playing;
         });
       }
+
+      // Detectar el fin de la cola nativa
+      if (state.processingState == ProcessingState.completed) {
+        _playNextAlbum();
+      }
     });
 
-    MyAudioHandler.onSongCompleted = _playNextSongAutomatically;
+
 
     _initAppStartup();
 
@@ -742,6 +777,37 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
           _playSongInAlbum(_currentPlayingAlbumIndex, _currentSongInAlbumIndex);
         }
       }
+    }
+  }
+
+  // Variable de bandera a nivel de clase para evitar que se dispare múltiples veces
+  bool _isTransitioningAlbum = false;
+
+  Future<void> _playNextAlbum() async {
+    if (albumList.isEmpty || _currentPlayingAlbumIndex == -1) return;
+    if (_isTransitioningAlbum) return; // Evitar ejecuciones duplicadas
+
+    _isTransitioningAlbum = true;
+
+    try {
+      // 1. Detener explícitamente el reproductor para limpiar el decodificador (MediaCodec)
+      await _audioPlayer.stop();
+
+      // 2. Darle un pequeñísimo respiro al hilo principal para que el GC de Android actúe
+      // sin interrumpir el nuevo audio (evita el "trabón")
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      int nextAlbumIndex = _currentPlayingAlbumIndex + 1;
+
+      if (nextAlbumIndex >= albumList.length) {
+        nextAlbumIndex = 0;
+      }
+
+      if (albumList[nextAlbumIndex].songs.isNotEmpty) {
+        await _playSongInAlbum(nextAlbumIndex, 0);
+      }
+    } finally {
+      _isTransitioningAlbum = false;
     }
   }
 
@@ -1067,45 +1133,51 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
       if (album.songs.isEmpty) return;
       if (songIndex < 0 || songIndex >= album.songs.length) return;
 
+      // 1. Crear una lista de fuentes de audio concatenadas (Queue Nativa)
+      final playlist = ConcatenatingAudioSource(
+        useLazyPreparation: true,
+        children: album.songs.map((song) {
+          final path = song['filePath'] ?? '';
+          return AudioSource.file(path);
+        }).toList(),
+      );
+
       final song = album.songs[songIndex];
       String path = song['filePath'] ?? '';
       String songTitle = song['title'] ?? 'Sin título';
       String songArtist = song['artist'] ?? album.artist;
 
-      if (path.isNotEmpty && File(path).existsSync()) {
+      setState(() {
+        _currentPlayingAlbumIndex = albumIndex;
+        _currentSongInAlbumIndex = songIndex;
+        _currentAudioPath = path;
+        _position = Duration.zero;
+        _isPlaying = false;
+      });
+
+      audioHandler.updateCurrentMetadata(
+        title: songTitle,
+        artist: songArtist,
+        artUri: album.image,
+        album: album.title,
+        filePath: path,
+      );
+
+      await _audioPlayer.setVolume(_volume);
+
+      // 2. Establecer la playlist nativa en just_audio e indicar el índice inicial
+      await _audioPlayer.setAudioSource(
+        playlist,
+        initialIndex: songIndex,
+        initialPosition: Duration.zero,
+      );
+
+      await _audioPlayer.play();
+
+      if (mounted) {
         setState(() {
-          _currentPlayingAlbumIndex = albumIndex;
-          _currentSongInAlbumIndex = songIndex;
-          _currentAudioPath = path;
-          _position = Duration.zero;
-          _isPlaying = false;
+          _isPlaying = _audioPlayer.playing;
         });
-
-        audioHandler.updateCurrentMetadata(
-          title: songTitle,
-          artist: songArtist,
-          artUri: album.image,          // Para la portada
-          album: album.title,
-          filePath: path,
-        );
-
-        await _audioPlayer.setVolume(_volume);
-
-        await _audioPlayer.setAudioSource(
-          AudioSource.file(path),
-          preload: true,
-        );
-
-        await _audioPlayer.play();
-
-        if (mounted) {
-          setState(() {
-            _isPlaying = _audioPlayer.playing;
-          });
-        }
-      } else {
-        debugPrint('El archivo de audio no existe en la ruta: $path');
-        _playNextSongAutomatically();
       }
     } catch (e) {
       debugPrint('Error al reproducir audio: $e');
