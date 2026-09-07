@@ -2,7 +2,7 @@ name: music_player_app
 description: "A new Flutter project."
 publish_to: 'none'
 
-version: 1.0.1+2
+version: 1.0.2+3
 
 environment:
   sdk: ^3.13.2
@@ -11,10 +11,11 @@ dependencies:
   flutter:
     sdk: flutter
   just_audio: ^0.9.36
+  audio_session: ^0.1.25
   path_provider: ^2.1.0
   cupertino_icons: ^1.0.8
   file_picker: ^12.1.2
-  flutter_taglib: ^1.5.2   # <--- Nuevo
+  flutter_taglib: ^1.5.2
   shared_preferences: ^2.2.2
   palette_generator: ^0.3.3+3
   audio_service: ^0.18.15
@@ -24,12 +25,12 @@ dependencies:
   path: ^1.9.0
   permission_handler: ^11.3.0
   flutter_inappwebview: ^6.1.5
-  screenshot: ^3.0.0      # Para capturar el widget como imagen
+  screenshot: ^3.0.0
   share_plus: ^13.3.0
   flutter_launcher_icons: ^0.13.1
-  package_info_plus: 10.2.1 # Para saber qué versión tiene el usuario instalada
+  package_info_plus: ^10.2.1
   url_launcher: ^6.2.5
-
+  watcher: ^1.1.0
 
 dev_dependencies:
   flutter_test:
@@ -46,5 +47,3 @@ flutter_icons:
   android: "launcher_icon"
   ios: true
   image_path: "assets/icon/app_icon.png"
-  # Opcional: Si quieres un color de fondo específico para el ícono adaptativo en Android
-  # background_color: "#000000"
