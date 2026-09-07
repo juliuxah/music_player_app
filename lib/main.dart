@@ -170,17 +170,20 @@ class FlacDownloadService {
     Directory? tempFolder;
     try {
       Directory musicFolder;
-      if (customDestinationDir != null) {
-        musicFolder = Directory(p.join(customDestinationDir, 'flacDownloader'));
-      } else {
+      // En iOS SIEMPRE usamos la carpeta interna de documentos de la app
+      // Intentar crear carpetas en rutas externas (iCloud, carpetas compartidas) falla con "Operation not permitted"
+      if (Platform.isIOS || customDestinationDir == null) {
         final appDocDir = await getApplicationDocumentsDirectory();
         musicFolder = Directory(p.join(appDocDir.path, 'MusicLibrary'));
+      } else {
+        // En Android podemos usar la carpeta vinculada
+        musicFolder = Directory(p.join(customDestinationDir, 'flacDownloader'));
       }
 
       if (!await musicFolder.exists()) {
         await musicFolder.create(recursive: true);
       }
-
+      
       final tempDir = await getTemporaryDirectory();
       final downloadSessionId = DateTime.now().millisecondsSinceEpoch.toString();
       final tempFolderPath = p.join(tempDir.path, 'download_$downloadSessionId');
@@ -1458,24 +1461,49 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
   }
 
   Future<void> _selectMusicFolderAction() async {
-    final hasPermission = await widget.musicFolderService.requestStoragePermissions();
-    if (!hasPermission) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Permisos de almacenamiento denegados')),
+    if (Platform.isIOS) {
+      // En iOS, el escaneo de carpetas es restringido por el Sandbox.
+      // Por eso, usamos directamente el selector de archivos (múltiple).
+      try {
+        List<PlatformFile> result = await FilePicker.pickFiles(
+          type: FileType.custom,
+          allowedExtensions: ['flac', 'mp3', 'm4a', 'wav', 'aac'],
+          allowMultiple: true,
         );
-      }
-      return;
-    }
 
-    final selectedPath = await widget.musicFolderService.selectMusicFolder();
-    if (selectedPath != null) {
-      final files = await widget.musicFolderService.scanMusicFolder();
-      _loadMusicFilesFromFolder(files);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Carpeta vinculada: ${p.basename(selectedPath)}')),
-        );
+        if (result.isNotEmpty) {
+          final List<String> validPaths = result.map((e) => e.path).whereType<String>().toList();
+          await _loadMusicFilesFromFolder(validPaths);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('${validPaths.length} canciones importadas')),
+            );
+          }
+        }
+      } catch (e) {
+        debugPrint('Error en selector iOS: $e');
+      }
+    } else {
+      // Android: Flujo normal de vinculación de carpeta
+      final hasPermission = await widget.musicFolderService.requestStoragePermissions();
+      if (!hasPermission) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Permisos de almacenamiento denegados')),
+          );
+        }
+        return;
+      }
+
+      final selectedPath = await widget.musicFolderService.selectMusicFolder();
+      if (selectedPath != null) {
+        final files = await widget.musicFolderService.scanMusicFolder();
+        _loadMusicFilesFromFolder(files);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Carpeta vinculada: ${p.basename(selectedPath)}')),
+          );
+        }
       }
     }
   }
