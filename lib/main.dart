@@ -3,9 +3,7 @@ import 'dart:io';
 import 'dart:ui';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:path_provider/path_provider.dart';
@@ -22,7 +20,7 @@ import 'update_service.dart';
 import 'package:audio_session/audio_session.dart';
 
 import 'music_folder_service.dart';
-import 'music_folder_widget.dart';
+
 
 
 late MyAudioHandler audioHandler;
@@ -278,40 +276,75 @@ class LyricsService {
     required String albumName,
     int? durationSeconds,
   }) async {
+    // Intentar con Servicio 1: LRCLib (Coincidencia exacta)
+    final syncedLrc1 = await _fetchFromLRCLibExact(trackName, artistName, albumName, durationSeconds);
+    if (syncedLrc1 != null) return syncedLrc1;
+
+    // Intentar con Servicio 2: LRCLib (Búsqueda general)
+    final syncedLrc2 = await _fetchFromLRCLibSearch(trackName, artistName);
+    if (syncedLrc2 != null) return syncedLrc2;
+
+    // Intentar con Servicio 3: Textyl API (Sincronización alternativa)
+    final syncedLrc3 = await _fetchFromTextyl(trackName, artistName);
+    if (syncedLrc3 != null) return syncedLrc3;
+
+    return null;
+  }
+
+  // --- SERVICIO 1: LRCLib Exact Match ---
+  static Future<List<LrcLine>?> _fetchFromLRCLibExact(String track, String artist, String album, int? duration) async {
     try {
-      final query = 'track_name=${Uri.encodeComponent(trackName)}'
-          '&artist_name=${Uri.encodeComponent(artistName)}'
-          '&album_name=${Uri.encodeComponent(albumName)}'
-          '${durationSeconds != null ? "&duration=$durationSeconds" : ""}';
-
+      final query = 'track_name=${Uri.encodeComponent(track)}'
+          '&artist_name=${Uri.encodeComponent(artist)}'
+          '&album_name=${Uri.encodeComponent(album)}'
+          '${duration != null ? "&duration=$duration" : ""}';
       final url = Uri.parse('https://lrclib.net/api/get?$query');
-      final response = await http.get(url);
-
+      final response = await http.get(url).timeout(const Duration(seconds: 3));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        final String? syncedLyrics = data['syncedLyrics'];
-        
-        if (syncedLyrics != null && syncedLyrics.isNotEmpty) {
-          return _parseLrc(syncedLyrics);
-        }
+        if (data['syncedLyrics'] != null) return _parseLrc(data['syncedLyrics']);
       }
-      
-      // Si no encuentra por coincidencia exacta, probar búsqueda general
-      final searchUrl = Uri.parse('https://lrclib.net/api/search?q=${Uri.encodeComponent("$trackName $artistName")}');
-      final searchResponse = await http.get(searchUrl);
-      
-      if (searchResponse.statusCode == 200) {
-        final List<dynamic> searchData = json.decode(searchResponse.body);
-        if (searchData.isNotEmpty) {
-          final String? syncedLyrics = searchData[0]['syncedLyrics'];
-          if (syncedLyrics != null && syncedLyrics.isNotEmpty) {
-            return _parseLrc(syncedLyrics);
+    } catch (_) {}
+    return null;
+  }
+
+  // --- SERVICIO 2: LRCLib Search ---
+  static Future<List<LrcLine>?> _fetchFromLRCLibSearch(String track, String artist) async {
+    try {
+      final url = Uri.parse('https://lrclib.net/api/search?q=${Uri.encodeComponent("$track $artist")}');
+      final response = await http.get(url).timeout(const Duration(seconds: 3));
+      if (response.statusCode == 200) {
+        final List<dynamic> searchData = json.decode(response.body);
+        for (var item in searchData) {
+          if (item['syncedLyrics'] != null && item['syncedLyrics'].toString().isNotEmpty) {
+            return _parseLrc(item['syncedLyrics']);
           }
         }
       }
-    } catch (e) {
-      debugPrint('Error obteniendo letras: $e');
-    }
+    } catch (_) {}
+    return null;
+  }
+
+  // --- SERVICIO 3: Textyl API (Fallback) ---
+  static Future<List<LrcLine>?> _fetchFromTextyl(String track, String artist) async {
+    try {
+      // Textyl es otro proveedor gratuito de letras sincronizadas
+      final url = Uri.parse('https://api.textyl.co/api/lyrics?q=${Uri.encodeComponent("$track $artist")}');
+      final response = await http.get(url).timeout(const Duration(seconds: 3));
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(response.body);
+        // Textyl devuelve JSON con timestamps, lo convertimos a nuestro formato
+        final List<LrcLine> lines = [];
+        for (var item in data) {
+          final seconds = (item['seconds'] as num).toDouble();
+          lines.add(LrcLine(
+            Duration(milliseconds: (seconds * 1000).toInt()),
+            item['lyrics'].toString().trim(),
+          ));
+        }
+        if (lines.isNotEmpty) return lines;
+      }
+    } catch (_) {}
     return null;
   }
 
@@ -1013,19 +1046,17 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
 
   Future<void> _scanAssetsForMusic() async {
     try {
-      // Intentar cargar el manifiesto de assets
-      final manifestContent = await rootBundle.loadString('AssetManifest.json');
-      final Map<String, dynamic> manifestMap = json.decode(manifestContent);
-
-      final audioPaths = manifestMap.keys
+      // Usar la API moderna de AssetManifest para evitar errores en versiones recientes de Flutter
+      final manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
+      final audioPaths = manifest.listAssets()
           .where((String key) => key.startsWith('assets/audios/'))
           .where((String key) =>
-      key.toLowerCase().endsWith('.mp3') ||
-          key.toLowerCase().endsWith('.flac') ||
-          key.toLowerCase().endsWith('.wav') ||
-          key.toLowerCase().endsWith('.m4a') ||
-          key.toLowerCase().endsWith('.aac') ||
-          key.toLowerCase().endsWith('.ogg'))
+              key.toLowerCase().endsWith('.mp3') ||
+              key.toLowerCase().endsWith('.flac') ||
+              key.toLowerCase().endsWith('.wav') ||
+              key.toLowerCase().endsWith('.m4a') ||
+              key.toLowerCase().endsWith('.aac') ||
+              key.toLowerCase().endsWith('.ogg'))
           .toList();
 
       if (audioPaths.isEmpty) return;
@@ -1042,7 +1073,7 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
         }
 
         if (!exists) {
-          await _addFlacOrMusicFile(path, sourceType: AudioSourceType.asset);
+          await _addFlacOrMusicFile(path, sourceType: AudioSourceType.asset, updateState: false);
           importedAny = true;
         }
       }
@@ -1123,11 +1154,12 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
 
   // ========== MÉTODO GENÉRICO PARA AGREGAR ARCHIVOS ==========
   /// Agrega un archivo de música a la biblioteca (genérico para cualquier formato)
-  Future<void> _addFlacOrMusicFile(String filePath, {AudioSourceType sourceType = AudioSourceType.file}) async {
+  Future<void> _addFlacOrMusicFile(String filePath, {AudioSourceType sourceType = AudioSourceType.file, bool updateState = true}) async {
     if (sourceType == AudioSourceType.file && !File(filePath).existsSync()) {
       debugPrint('Archivo no encontrado: $filePath');
       return;
     }
+    // ... (resto del procesamiento inicial)
 
     String title = p.basenameWithoutExtension(filePath);
     String artist = 'Artista Desconocido';
@@ -1175,46 +1207,64 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
       }
     }
 
+    final normData = _normalizeAlbumData(albumName);
+    final String cleanAlbumName = normData['name'];
+    final int discNumber = normData['disc'];
+    final String mainArtist = _getMainArtist(artist);
+
     final songData = {
       'title': title,
       'artist': artist,
+      'album': cleanAlbumName,
       'genre': 'Música',
       'filePath': filePath,
       'track': trackNumber,
+      'disc': discNumber,
       'sourceType': sourceType.name,
     };
 
-    setState(() {
-      int existingAlbumIndex = albumList.indexWhere(
-            (a) =>
-        a.title.toLowerCase() == albumName.toLowerCase() &&
-            a.artist.toLowerCase() == artist.toLowerCase(),
-      );
+    void updateDataModel() {
+      int existingAlbumIndex = albumList.indexWhere((a) {
+        final titleMatch = a.title.toLowerCase() == cleanAlbumName.toLowerCase();
+        final artistMatch = _getMainArtist(a.artist).toLowerCase() == mainArtist.toLowerCase();
+        return titleMatch && artistMatch;
+      });
 
       if (existingAlbumIndex != -1) {
         bool exists = albumList[existingAlbumIndex].songs.any((s) => s['filePath'] == filePath);
         if (!exists) {
           albumList[existingAlbumIndex].songs.add(songData);
-          albumList[existingAlbumIndex]
-              .songs
-              .sort((a, b) => (a['track'] as int).compareTo(b['track'] as int));
+          albumList[existingAlbumIndex].songs.sort((a, b) {
+            final discA = a['disc'] as int? ?? 1;
+            final discB = b['disc'] as int? ?? 1;
+            if (discA != discB) return discA.compareTo(discB);
+            return (a['track'] as int).compareTo(b['track'] as int);
+          });
         }
       } else {
         albumList.add(AlbumModel(
-          title: albumName,
+          title: cleanAlbumName,
           artist: artist,
           image: albumImage,
           songs: [songData],
         ));
       }
-    });
+    }
 
-    await _saveAlbumsToPrefs();
+    if (updateState) {
+      setState(() {
+        updateDataModel();
+      });
+      await _saveAlbumsToPrefs();
+    } else {
+      updateDataModel();
+    }
   }
 
   // ========== MÉTODOS PARA GESTOR DE CARPETA ==========
   /// Cargar archivos de música desde la carpeta seleccionada
   Future<void> _loadMusicFilesFromFolder(List<String> filePaths) async {
+    int count = 0;
     for (String filePath in filePaths) {
       // Verificar si ya existe la canción en la biblioteca
       bool exists = false;
@@ -1227,11 +1277,23 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
 
       if (!exists && File(filePath).existsSync()) {
         try {
-          await _addFlacOrMusicFile(filePath);
+          await _addFlacOrMusicFile(filePath, updateState: false);
+          count++;
+          
+          // Cada 5 archivos, le damos un respiro a la UI
+          if (count % 5 == 0) {
+            await Future.delayed(Duration.zero);
+            setState(() {}); // Actualización parcial para mostrar progreso
+          }
         } catch (e) {
           debugPrint('Error cargando archivo $filePath: $e');
         }
       }
+    }
+    
+    if (count > 0) {
+      setState(() {});
+      await _saveAlbumsToPrefs();
     }
   }
 
@@ -1427,29 +1489,42 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
       debugPrint('Aviso: No se pudieron leer tags del FLAC: $e');
     }
 
+    final normData = _normalizeAlbumData(albumName);
+    final String cleanAlbumName = normData['name'];
+    final int discNumber = normData['disc'];
+    final String mainArtist = _getMainArtist(artist);
+
     final songData = {
       'title': title,
       'artist': artist,
+      'album': cleanAlbumName,
       'genre': 'FLAC Audio',
       'filePath': filePath,
       'track': trackNumber,
+      'disc': discNumber,
     };
 
     setState(() {
-      int existingAlbumIndex = albumList.indexWhere(
-            (a) =>
-        a.title.toLowerCase() == albumName.toLowerCase() &&
-            a.artist.toLowerCase() == artist.toLowerCase(),
-      );
+      int existingAlbumIndex = albumList.indexWhere((a) {
+        final titleMatch = a.title.toLowerCase() == cleanAlbumName.toLowerCase();
+        final artistMatch = _getMainArtist(a.artist).toLowerCase() == mainArtist.toLowerCase();
+        return titleMatch && artistMatch;
+      });
 
       if (existingAlbumIndex != -1) {
-        albumList[existingAlbumIndex].songs.add(songData);
-        albumList[existingAlbumIndex]
-            .songs
-            .sort((a, b) => (a['track'] as int).compareTo(b['track'] as int));
+        bool exists = albumList[existingAlbumIndex].songs.any((s) => s['filePath'] == filePath);
+        if (!exists) {
+          albumList[existingAlbumIndex].songs.add(songData);
+          albumList[existingAlbumIndex].songs.sort((a, b) {
+            final discA = a['disc'] as int? ?? 1;
+            final discB = b['disc'] as int? ?? 1;
+            if (discA != discB) return discA.compareTo(discB);
+            return (a['track'] as int).compareTo(b['track'] as int);
+          });
+        }
       } else {
         albumList.add(AlbumModel(
-          title: albumName,
+          title: cleanAlbumName,
           artist: artist,
           image: albumImage,
           songs: [songData],
@@ -1461,49 +1536,24 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
   }
 
   Future<void> _selectMusicFolderAction() async {
-    if (Platform.isIOS) {
-      // En iOS, el escaneo de carpetas es restringido por el Sandbox.
-      // Por eso, usamos directamente el selector de archivos (múltiple).
-      try {
-        List<PlatformFile> result = await FilePicker.pickFiles(
-          type: FileType.custom,
-          allowedExtensions: ['flac', 'mp3', 'm4a', 'wav', 'aac'],
-          allowMultiple: true,
+    final hasPermission = await widget.musicFolderService.requestStoragePermissions();
+    if (!hasPermission) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Permisos de almacenamiento denegados')),
         );
-
-        if (result.isNotEmpty) {
-          final List<String> validPaths = result.map((e) => e.path).whereType<String>().toList();
-          await _loadMusicFilesFromFolder(validPaths);
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('${validPaths.length} canciones importadas')),
-            );
-          }
-        }
-      } catch (e) {
-        debugPrint('Error en selector iOS: $e');
       }
-    } else {
-      // Android: Flujo normal de vinculación de carpeta
-      final hasPermission = await widget.musicFolderService.requestStoragePermissions();
-      if (!hasPermission) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Permisos de almacenamiento denegados')),
-          );
-        }
-        return;
-      }
+      return;
+    }
 
-      final selectedPath = await widget.musicFolderService.selectMusicFolder();
-      if (selectedPath != null) {
-        final files = await widget.musicFolderService.scanMusicFolder();
-        _loadMusicFilesFromFolder(files);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Carpeta vinculada: ${p.basename(selectedPath)}')),
-          );
-        }
+    final selectedPath = await widget.musicFolderService.selectMusicFolder();
+    if (selectedPath != null) {
+      final files = await widget.musicFolderService.scanMusicFolder();
+      await _loadMusicFilesFromFolder(files);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Carpeta vinculada: ${p.basename(selectedPath)}')),
+        );
       }
     }
   }
@@ -1580,66 +1630,7 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
     }
   }
 
-  Future<void> _playNextSongAutomatically() async {
-    if (albumList.isEmpty) return;
 
-    // Obtener la canción actual desde la metadata de audio_service o del estado local
-    final currentMediaItem = audioHandler.mediaItem.value;
-    int currentAlbumIdx = _currentPlayingAlbumIndex;
-    int currentSongIdx = _currentSongInAlbumIndex;
-
-    // Si tenemos el id (filePath) en el mediaItem, aseguramos encontrar la posición exacta
-    if (currentMediaItem != null) {
-      for (int a = 0; a < albumList.length; a++) {
-        for (int s = 0; s < albumList[a].songs.length; s++) {
-          if (albumList[a].songs[s]['filePath'] == currentMediaItem.id) {
-            currentAlbumIdx = a;
-            currentSongIdx = s;
-            break;
-          }
-        }
-      }
-    }
-
-    if (currentAlbumIdx == -1) return;
-
-    final currentAlbum = albumList[currentAlbumIdx];
-
-    // 1. Si hay más canciones en el MISMO álbum, reproducir la siguiente
-    if (currentSongIdx + 1 < currentAlbum.songs.length) {
-      await _playSongInAlbum(currentAlbumIdx, currentSongIdx + 1);
-    }
-    // 2. Si se acabaron las canciones de este álbum, pasar al SIGUIENTE álbum que tenga canciones
-    else if (currentAlbumIdx + 1 < albumList.length) {
-      int nextAlbumIndex = currentAlbumIdx + 1;
-
-      while (nextAlbumIndex < albumList.length && albumList[nextAlbumIndex].songs.isEmpty) {
-        nextAlbumIndex++;
-      }
-
-      if (nextAlbumIndex < albumList.length) {
-        await _playSongInAlbum(nextAlbumIndex, 0);
-      } else {
-        await _audioPlayer.stop();
-        if (mounted) {
-          setState(() {
-            _isPlaying = false;
-            _currentSongInAlbumIndex = -1;
-          });
-        }
-      }
-    }
-    // 3. Fin de la biblioteca
-    else {
-      await _audioPlayer.stop();
-      if (mounted) {
-        setState(() {
-          _isPlaying = false;
-          _currentSongInAlbumIndex = -1;
-        });
-      }
-    }
-  }
 
   Future<void> _playPreviousSong() async {
     if (albumList.isEmpty) return;
@@ -1701,6 +1692,41 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
       return 0;
     }
     return _pageController.page?.round().clamp(0, albumList.isEmpty ? 0 : albumList.length - 1) ?? 0;
+  }
+
+  /// Extrae el artista principal (el primero antes de una coma, feat, &, etc.)
+  String _getMainArtist(String artist) {
+    final regex = RegExp(r'[,;&]|feat\.?|with|(?<=\s)y(?=\s)', caseSensitive: false);
+    String mainArtist = artist.split(regex).first.trim();
+    return mainArtist.isEmpty ? artist : mainArtist;
+  }
+
+  /// Normaliza el nombre del álbum y extrae el número de disco/lado
+  Map<String, dynamic> _normalizeAlbumData(String albumName) {
+    String cleanName = albumName.trim();
+    final discRegex = RegExp(
+        r'[(\[\s\-/]*(?:Disc|Disco|CD|Lado|Side|Vol|Volume|Part|Parte|Pt)\s*(\d+|[A-Z])[\s)\]]*$',
+        caseSensitive: false);
+
+    int discNumber = 1;
+    final discMatch = discRegex.firstMatch(cleanName);
+    if (discMatch != null) {
+      String discStr = discMatch.group(1) ?? '1';
+      if (RegExp(r'^[A-Z]$', caseSensitive: false).hasMatch(discStr)) {
+        discNumber = discStr.toUpperCase().codeUnitAt(0) - 64;
+      } else {
+        discNumber = int.tryParse(discStr) ?? 1;
+      }
+      cleanName = cleanName.substring(0, discMatch.start).trim();
+    }
+
+    final editionRegex = RegExp(
+        r'[(\[\s\-/]*(?:Deluxe|Expanded|Remastered|Special|Anniversary|Collector|Bonus|Standard|Original|Soundtrack|OST).*(?:Edition|Version|Ver|Ed|Master|Mix|Release|Issue)*[\s)\]]*$',
+        caseSensitive: false);
+    cleanName = cleanName.replaceFirst(editionRegex, '').trim();
+    cleanName = cleanName.replaceAll(RegExp(r'[\s\-\[({,:;]+$'), '').trim();
+
+    return {'name': cleanName.isEmpty ? albumName : cleanName, 'disc': discNumber};
   }
 
   Future<Color> _getDominantColor(String imageSource) async {
@@ -1766,233 +1792,228 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
                     children: [
                       Screenshot(
                         controller: _screenshotController,
-                        child: RepaintBoundary(
-                          key: _shareCardKey,
-                          child: Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(24),
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(28),
-                              gradient: LinearGradient(
-                                colors: [
-                                  dominantColor.withOpacity(0.95),
-                                  dominantColor.withOpacity(0.6),
-                                  Colors.black.withOpacity(0.9),
-                                ],
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                              ),
-                              border: Border.all(
-                                color: Colors.white.withOpacity(0.12),
-                                width: 1.2,
-                              ),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withOpacity(0.6),
-                                  blurRadius: 30,
-                                  spreadRadius: 2,
-                                  offset: const Offset(0, 15),
+                        child: Container(
+                          color: Colors.transparent,
+                          child: RepaintBoundary(
+                            key: _shareCardKey,
+                            child: Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(24),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(28),
+                                gradient: LinearGradient(
+                                  colors: [
+                                    dominantColor.withOpacity(0.95),
+                                    dominantColor.withOpacity(0.6),
+                                    Colors.black.withOpacity(0.9),
+                                  ],
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
                                 ),
-                              ],
-                            ),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Container(
-                                          padding: const EdgeInsets.all(6),
-                                          decoration: BoxDecoration(
-                                            color: Colors.white.withOpacity(0.1),
-                                            shape: BoxShape.circle,
-                                          ),
-                                          child: const Icon(
-                                            Icons.graphic_eq_rounded,
-                                            color: Colors.white70,
-                                            size: 16,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        const Text(
-                                          'NOW PLAYING',
-                                          style: TextStyle(
-                                            color: Colors.white60,
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.w700,
-                                            letterSpacing: 1.5,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white.withOpacity(0.15),
-                                        borderRadius: BorderRadius.circular(14),
-                                        border: Border.all(
-                                          color: Colors.white.withOpacity(0.2),
-                                          width: 0.8,
-                                        ),
-                                      ),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
+                                border: Border.all(
+                                  color: Colors.white.withOpacity(0.12),
+                                  width: 1.2,
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.6),
+                                    blurRadius: 30,
+                                    spreadRadius: 2,
+                                    offset: const Offset(0, 15),
+                                  ),
+                                ],
+                              ),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Row(
                                         children: [
-                                          ClipRRect(
-                                            borderRadius: BorderRadius.circular(6),
-                                            child: Image.asset(
-                                              'assets/ojo.gif',
-                                              width: 16,
-                                              height: 16,
-                                              fit: BoxFit.cover,
-                                              errorBuilder: (context, error, stackTrace) =>
-                                              const Icon(Icons.remove_red_eye, color: Colors.white, size: 14),
+                                          Container(
+                                            padding: const EdgeInsets.all(6),
+                                            decoration: BoxDecoration(
+                                              color: Colors.white.withOpacity(0.1),
+                                              shape: BoxShape.circle,
+                                            ),
+                                            child: const Icon(
+                                              Icons.graphic_eq_rounded,
+                                              color: Colors.white70,
+                                              size: 16,
                                             ),
                                           ),
-                                          const SizedBox(width: 6),
+                                          const SizedBox(width: 8),
                                           const Text(
-                                            'BIN Music',
+                                            'NOW PLAYING',
                                             style: TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w900,
-                                              letterSpacing: 0.8,
+                                              color: Colors.white60,
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.w700,
+                                              letterSpacing: 1.5,
                                             ),
                                           ),
                                         ],
                                       ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 24),
-                                Center(
-                                  child: Stack(
-                                    alignment: Alignment.center,
-                                    children: [
                                       Container(
-                                        width: 210,
-                                        height: 210,
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                         decoration: BoxDecoration(
-                                          borderRadius: BorderRadius.circular(20),
-                                          boxShadow: [
-                                            BoxShadow(
-                                              color: dominantColor.withOpacity(0.4),
-                                              blurRadius: 45,
-                                              spreadRadius: 8,
+                                          color: Colors.white.withOpacity(0.15),
+                                          borderRadius: BorderRadius.circular(14),
+                                          border: Border.all(
+                                            color: Colors.white.withOpacity(0.2),
+                                            width: 0.8,
+                                          ),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            ClipRRect(
+                                              borderRadius: BorderRadius.circular(6),
+                                              child: Image.asset(
+                                                'assets/ojo.gif',
+                                                width: 16,
+                                                height: 16,
+                                                fit: BoxFit.cover,
+                                                errorBuilder: (context, error, stackTrace) =>
+                                                    const Icon(Icons.remove_red_eye, color: Colors.white, size: 14),
+                                              ),
                                             ),
-                                            BoxShadow(
-                                              color: Colors.black.withOpacity(0.7),
-                                              blurRadius: 25,
-                                              offset: const Offset(0, 12),
+                                            const SizedBox(width: 6),
+                                            const Text(
+                                              'BIN Music',
+                                              style: TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w900,
+                                                letterSpacing: 0.8,
+                                              ),
                                             ),
                                           ],
                                         ),
                                       ),
-                                      ClipRRect(
-                                        borderRadius: BorderRadius.circular(20),
-                                        child: SizedBox(
-                                          width: 220,
-                                          height: 220,
-                                          child: _buildAlbumImage(albumImage),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 24),
+                                  Center(
+                                    child: Stack(
+                                      alignment: Alignment.center,
+                                      children: [
+                                        Container(
+                                          width: 210,
+                                          height: 210,
+                                          decoration: BoxDecoration(
+                                            borderRadius: BorderRadius.circular(20),
+                                            boxShadow: [
+                                              BoxShadow(
+                                                color: dominantColor.withOpacity(0.4),
+                                                blurRadius: 45,
+                                                spreadRadius: 8,
+                                              ),
+                                              BoxShadow(
+                                                color: Colors.black.withOpacity(0.7),
+                                                blurRadius: 25,
+                                                offset: const Offset(0, 12),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        ClipRRect(
+                                          borderRadius: BorderRadius.circular(20),
+                                          child: SizedBox(
+                                            width: 220,
+                                            height: 220,
+                                            child: _buildAlbumImage(albumImage),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 26),
+                                  Row(
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              songTitle,
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 21,
+                                                fontWeight: FontWeight.bold,
+                                                letterSpacing: -0.5,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              artistName,
+                                              style: TextStyle(
+                                                color: Colors.white.withOpacity(0.8),
+                                                fontSize: 15,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              albumTitle,
+                                              style: TextStyle(
+                                                color: Colors.white.withOpacity(0.45),
+                                                fontSize: 12,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      Material(
+                                        color: Colors.transparent,
+                                        child: InkWell(
+                                          borderRadius: BorderRadius.circular(16),
+                                          onTap: () async {
+                                            final imageUint8List = await _screenshotController.capture(
+                                              delay: const Duration(milliseconds: 150),
+                                            );
+                                            if (imageUint8List != null) {
+                                              final tempDir = await getTemporaryDirectory();
+                                              final file = File('${tempDir.path}/share_track.png');
+                                              await file.writeAsBytes(imageUint8List);
+                                              await Share.shareXFiles(
+                                                [XFile(file.path, mimeType: 'image/png')],
+                                                text: '¡Escuchando "$songTitle" de $artistName en BIN Music! 🎵',
+                                              );
+                                              if (ctx.mounted) Navigator.pop(ctx);
+                                            }
+                                          },
+                                          child: Container(
+                                            padding: const EdgeInsets.all(12),
+                                            decoration: BoxDecoration(
+                                              color: Colors.white.withOpacity(0.12),
+                                              borderRadius: BorderRadius.circular(16),
+                                              border: Border.all(
+                                                color: Colors.white.withOpacity(0.2),
+                                                width: 1,
+                                              ),
+                                            ),
+                                            child: const Icon(
+                                              Icons.ios_share_rounded,
+                                              color: Colors.white,
+                                              size: 20,
+                                            ),
+                                          ),
                                         ),
                                       ),
                                     ],
                                   ),
-                                ),
-                                const SizedBox(height: 26),
-                                Row(
-                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                  children: [
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            songTitle,
-                                            style: const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 21,
-                                              fontWeight: FontWeight.bold,
-                                              letterSpacing: -0.5,
-                                            ),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            artistName,
-                                            style: TextStyle(
-                                              color: Colors.white.withOpacity(0.8),
-                                              fontSize: 15,
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                          const SizedBox(height: 2),
-                                          Text(
-                                            albumTitle,
-                                            style: TextStyle(
-                                              color: Colors.white.withOpacity(0.45),
-                                              fontSize: 12,
-                                            ),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    Material(
-                                      color: Colors.transparent,
-                                      child: InkWell(
-                                        borderRadius: BorderRadius.circular(16),
-                                        onTap: () async {
-                                          // Añadir un pequeño retraso (delay) evita capturas en blanco o errores dentro del Dialog
-                                          final imageUint8List = await _screenshotController.capture(
-                                            delay: const Duration(milliseconds: 150),
-                                          );
-
-                                          if (imageUint8List != null) {
-                                            final tempDir = await getTemporaryDirectory();
-                                            final file = File('${tempDir.path}/share_track.png');
-                                            await file.writeAsBytes(imageUint8List);
-
-                                            // Lanza la hoja de compartir ANTES de hacer el pop del contexto
-                                            await Share.shareXFiles(
-                                              [XFile(file.path)],
-                                              text: '¡Escuchando "$songTitle" de $artistName en BIN Music! 🎵',
-                                            );
-
-                                            // Cierra el diálogo solo cuando se ha lanzado la acción, verificando que siga montado
-                                            if (ctx.mounted) {
-                                              Navigator.pop(ctx);
-                                            }
-                                          }
-                                        },
-                                        child: Container(
-                                          padding: const EdgeInsets.all(12),
-                                          decoration: BoxDecoration(
-                                            color: Colors.white.withOpacity(0.12),
-                                            borderRadius: BorderRadius.circular(16),
-                                            border: Border.all(
-                                              color: Colors.white.withOpacity(0.2),
-                                              width: 1,
-                                            ),
-                                          ),
-                                          child: const Icon(
-                                            Icons.ios_share_rounded,
-                                            color: Colors.white,
-                                            size: 20,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
                           ),
                         ),
@@ -2031,226 +2052,7 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
     );
   }
 
-  void _showAlbumTracklist(int albumIndex) {
-    if (albumIndex >= albumList.length) return;
 
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            if (albumIndex >= albumList.length) return const SizedBox.shrink();
-            final album = albumList[albumIndex];
-
-            return Container(
-              decoration: const BoxDecoration(
-                color: Color(0xFF161618),
-                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-              ),
-              constraints: BoxConstraints(
-                maxHeight: MediaQuery.of(context).size.height * 0.65,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const SizedBox(height: 12),
-                  Center(
-                    child: Container(
-                      width: 36,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.white24,
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    child: Row(
-                      children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: SizedBox(
-                            width: 52,
-                            height: 52,
-                            child: _buildAlbumImage(album.image),
-                          ),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                album.title,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 16,
-                                  color: Colors.white,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                album.artist,
-                                style: const TextStyle(
-                                  color: Colors.white60,
-                                  fontSize: 13,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ],
-                          ),
-                        ),
-                        PopupMenuButton<String>(
-                          icon: const Icon(Icons.more_vert_rounded, color: Colors.white54, size: 22),
-                          color: const Color(0xFF222224),
-                          onSelected: (value) async {
-                            if (value == 'delete') {
-                              final confirm = await _showConfirmDeleteDialog(
-                                title: 'Eliminar álbum',
-                                content:
-                                '¿Estás seguro de que deseas eliminar "${album.title}" y todas sus canciones?',
-                              );
-
-                              if (confirm) {
-                                Navigator.pop(context);
-                                await _deleteAlbum(albumIndex);
-                              }
-                            }
-                          },
-                          itemBuilder: (context) => [
-                            const PopupMenuItem(
-                              value: 'delete',
-                              child: Row(
-                                children: [
-                                  Icon(Icons.delete_outline_rounded,
-                                      color: Colors.redAccent, size: 18),
-                                  SizedBox(width: 8),
-                                  Text('Eliminar álbum',
-                                      style: TextStyle(color: Colors.redAccent, fontSize: 13)),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    child: Divider(height: 1, color: Colors.white12),
-                  ),
-                  Expanded(
-                    child: ListView.builder(
-                      itemCount: album.songs.length,
-                      itemBuilder: (context, idx) {
-                        final song = album.songs[idx];
-                        final bool isSelected =
-                            _currentPlayingAlbumIndex == albumIndex && _currentSongInAlbumIndex == idx;
-                        final int trackNum = song['track'] ?? 0;
-
-                        return Material(
-                          color: Colors.transparent,
-                          child: ListTile(
-                            key: ValueKey(song['filePath'] ?? idx),
-                            dense: true,
-                            contentPadding: const EdgeInsets.only(left: 20, right: 4),
-                            leading: SizedBox(
-                              width: 24,
-                              child: Center(
-                                child: isSelected && _isPlaying
-                                    ? const Icon(Icons.volume_up_rounded, color: Colors.white, size: 20)
-                                    : Text(
-                                  trackNum > 0 ? '$trackNum' : '${idx + 1}',
-                                  style: TextStyle(
-                                    color: isSelected ? Colors.white : Colors.white38,
-                                    fontSize: 13,
-                                    fontWeight:
-                                    isSelected ? FontWeight.bold : FontWeight.normal,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            title: Text(
-                              song['title'] ?? 'Sin título',
-                              style: TextStyle(
-                                color: isSelected ? Colors.white : Colors.white70,
-                                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                                fontSize: 14,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            subtitle: Text(
-                              song['artist'] ?? album.artist,
-                              style: const TextStyle(
-                                color: Colors.white38,
-                                fontSize: 12,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            trailing: PopupMenuButton<String>(
-                              icon: const Icon(Icons.more_vert_rounded, color: Colors.white38, size: 18),
-                              color: const Color(0xFF222224),
-                              onSelected: (value) async {
-                                if (value == 'delete') {
-                                  final confirm = await _showConfirmDeleteDialog(
-                                    title: 'Eliminar canción',
-                                    content:
-                                    '¿Deseas eliminar "${song['title'] ?? 'esta canción'}"?',
-                                  );
-
-                                  if (confirm) {
-                                    await _deleteSong(albumIndex, idx);
-                                    if (albumList.length > albumIndex &&
-                                        albumList[albumIndex].songs.isNotEmpty) {
-                                      setModalState(() {});
-                                    } else {
-                                      Navigator.pop(context);
-                                    }
-                                  }
-                                }
-                              },
-                              itemBuilder: (context) => [
-                                const PopupMenuItem(
-                                  value: 'delete',
-                                  child: Row(
-                                    children: [
-                                      Icon(Icons.delete_outline_rounded,
-                                          color: Colors.redAccent, size: 18),
-                                      SizedBox(width: 8),
-                                      Text('Eliminar canción',
-                                          style: TextStyle(color: Colors.redAccent, fontSize: 13)),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                            onTap: () async {
-                              Navigator.pop(context);
-                              await _playSongInAlbum(albumIndex, idx);
-                            },
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
 
   String _formatDuration(Duration duration) {
     String twoDigits(int n) => n.toString().padLeft(2, '0');
@@ -2380,6 +2182,7 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
 
   @override
   Widget build(BuildContext context) {
+    debugPrint('🎨 Renderizando AlbumCollectionScreen (Álbumes: ${albumList.length})');
     // Determinar qué álbum mostrar en el fondo (background)
     // Prioridad 1: El álbum que se está reproduciendo actualmente
     // Prioridad 2: El álbum que se está visualizando en el carrusel
@@ -2459,11 +2262,20 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
                               builder: (context) => AlbumGridScreen(
                                 albums: albumList,
                                 onAlbumTap: (index) {
-                                  _pageController.animateToPage(
-                                    index,
-                                    duration: const Duration(milliseconds: 300),
-                                    curve: Curves.easeInOut,
-                                  );
+                                  setState(() {
+                                    _showLyricsView = false;
+                                    _showTracklistView = false;
+                                  });
+                                  // Esperar a que el PageView se monte tras cerrar letras/lista
+                                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                                    if (_pageController.hasClients) {
+                                      _pageController.animateToPage(
+                                        index,
+                                        duration: const Duration(milliseconds: 300),
+                                        curve: Curves.easeInOut,
+                                      );
+                                    }
+                                  });
                                 },
                               ),
                             ),
@@ -2545,6 +2357,7 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
                                     trackName: currentTitle,
                                     artistName: currentArtist,
                                     albumName: currentAlbumName,
+                                    duration: _duration,
                                     positionStream: _audioPlayer.positionStream,
                                     player: _audioPlayer,
                                     onClose: () => setState(() => _showLyricsView = false),
@@ -3053,6 +2866,7 @@ class LyricsBottomSheet extends StatefulWidget {
   final String trackName;
   final String artistName;
   final String albumName;
+  final Duration? duration;
   final Stream<Duration> positionStream;
   final AudioPlayer player;
   final VoidCallback? onClose;
@@ -3062,6 +2876,7 @@ class LyricsBottomSheet extends StatefulWidget {
     required this.trackName,
     required this.artistName,
     required this.albumName,
+    this.duration,
     required this.positionStream,
     required this.player,
     this.onClose,
@@ -3097,6 +2912,7 @@ class _LyricsBottomSheetState extends State<LyricsBottomSheet> {
       trackName: widget.trackName,
       artistName: widget.artistName,
       albumName: widget.albumName,
+      durationSeconds: widget.duration?.inSeconds,
     );
     if (mounted) {
       setState(() {

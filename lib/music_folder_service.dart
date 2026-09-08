@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:watcher/watcher.dart';
 
@@ -84,8 +85,18 @@ class MusicFolderService {
   Future<String?> selectMusicFolder() async {
     try {
       onStatusChanged?.call('📁 Abriendo selector...');
+      debugPrint('═══════ SELECCIONAR CARPETA ═══════');
+      debugPrint('Plataforma: ${Platform.isAndroid ? 'Android' : 'iOS'}');
 
-      String? selectedPath = await FilePicker.getDirectoryPath();
+      String? selectedPath;
+
+      if (Platform.isAndroid) {
+        selectedPath = await FilePicker.getDirectoryPath();
+      } else if (Platform.isIOS) {
+        selectedPath = await _selectFolderOnIOS();
+      } else {
+        selectedPath = await FilePicker.getDirectoryPath();
+      }
 
       if (selectedPath != null) {
         final dir = Directory(selectedPath);
@@ -101,15 +112,48 @@ class MusicFolderService {
         await _prefs.setString(_folderPathKey, selectedPath);
         _currentFolderPath = selectedPath;
         onStatusChanged?.call('✅ Carpeta: ${p.basename(selectedPath)}');
+        debugPrint('✅ Carpeta configurada: $selectedPath');
 
         await _startMonitoringFolder(selectedPath);
         return selectedPath;
       }
     } catch (e) {
       onStatusChanged?.call('❌ Error: $e');
+      debugPrint('❌ Error en selectMusicFolder: $e');
     }
     return null;
   }
+
+  /// Seleccionar carpeta en iOS (con fallback a Documentos)
+  Future<String?> _selectFolderOnIOS() async {
+    try {
+      debugPrint('📱 Intentando abrir selector de carpetas en iOS...');
+      
+      // Intentar usar FilePicker para obtener una ruta de directorio
+      // Nota: En iOS esto suele abrir el selector de iCloud/Archivos
+      String? result = await FilePicker.getDirectoryPath();
+
+      if (result != null) {
+        debugPrint('✅ Carpeta iOS seleccionada: $result');
+        return result;
+      }
+
+      // Si el usuario cancela o falla, podemos sugerir la carpeta de documentos de la app
+      // como un lugar donde pueden mover su música mediante iTunes/Finder
+      final appDocDir = await getApplicationDocumentsDirectory();
+      debugPrint('ℹ️ Usando carpeta de documentos como alternativa: ${appDocDir.path}');
+      return appDocDir.path;
+      
+    } catch (e) {
+      debugPrint('⚠️ Error en _selectFolderOnIOS: $e');
+      // Fallback final
+      final appDocDir = await getApplicationDocumentsDirectory();
+      return appDocDir.path;
+    }
+  }
+
+  /// Cambia a nueva carpeta y LIMPIA la anterior
+  Future<String?> selectNewMusicFolder() async => selectMusicFolder();
 
   String? getCurrentMusicFolder() => _currentFolderPath;
 
@@ -124,13 +168,12 @@ class MusicFolderService {
 
     try {
       final files = <String>[];
-      final fileList = dir.listSync(recursive: true, followLinks: false);
-
-      for (var file in fileList) {
-        if (file is File) {
-          final extension = p.extension(file.path).toLowerCase().replaceFirst('.', '');
+      // Usar list() asíncrono para evitar bloquear el hilo principal (UI thread)
+      await for (var entity in dir.list(recursive: true, followLinks: false)) {
+        if (entity is File) {
+          final extension = p.extension(entity.path).toLowerCase().replaceFirst('.', '');
           if (_supportedFormats.contains(extension)) {
-            files.add(file.path);
+            files.add(entity.path);
           }
         }
       }
