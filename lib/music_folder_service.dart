@@ -24,11 +24,38 @@ class MusicFolderService {
 
   Future<void> initialize() async {
     _prefs = await SharedPreferences.getInstance();
-    _currentFolderPath = _prefs.getString(_folderPathKey);
-
-    if (_currentFolderPath != null && await Directory(_currentFolderPath!).exists()) {
-      _startMonitoringFolder(_currentFolderPath!);
+    final savedPath = _prefs.getString(_folderPathKey);
+    
+    if (savedPath != null) {
+      // Resolver la ruta real (especialmente importante en iOS donde los IDs de contenedor cambian)
+      _currentFolderPath = await _resolvePath(savedPath);
+      
+      if (_currentFolderPath != null && await Directory(_currentFolderPath!).exists()) {
+        debugPrint('✅ Carpeta auto-detectada: $_currentFolderPath');
+        _startMonitoringFolder(_currentFolderPath!);
+      } else {
+        debugPrint('⚠️ La carpeta guardada ya no es accesible o no existe');
+      }
     }
+  }
+
+  /// Resuelve la ruta guardada. Si es iOS y estaba en Documentos, la reconstruye con el ID actual.
+  Future<String?> _resolvePath(String path) async {
+    if (Platform.isIOS && path.contains('/Documents/')) {
+      final appDocDir = await getApplicationDocumentsDirectory();
+      final parts = path.split('/Documents/');
+      if (parts.length > 1) {
+        return p.join(appDocDir.path, parts[1]);
+      }
+    }
+    return path;
+  }
+
+  /// Guarda la ruta de forma segura para persistencia entre reinicios
+  Future<void> _savePath(String path) async {
+    _currentFolderPath = path;
+    // En iOS guardamos la ruta completa, pero initialize se encargará de resolverla si cambia el contenedor
+    await _prefs.setString(_folderPathKey, path);
   }
 
   Future<bool> requestStoragePermissions() async {
@@ -42,22 +69,12 @@ class MusicFolderService {
 
   Future<bool> _requestAndroidPermissions() async {
     debugPrint('═══════ SOLICITANDO PERMISOS ═══════');
-
-    // En Android 13+ (API 33), necesitamos permisos específicos de audio
-    // Pero para escribir en carpetas personalizadas fuera del sandbox, MANAGE_EXTERNAL_STORAGE es lo más seguro
-    
     final manageStatus = await Permission.manageExternalStorage.status;
     if (manageStatus.isGranted) return true;
-
-    // Intentar pedir MANAGE_EXTERNAL_STORAGE directamente si no está concedido
-    // Esto abrirá la pantalla de ajustes del sistema
     final newManageStatus = await Permission.manageExternalStorage.request();
     if (newManageStatus.isGranted) return true;
-
-    // Fallback para versiones anteriores o si no se concedió el anterior
     final audioStatus = await Permission.audio.request();
     final storageStatus = await Permission.storage.request();
-
     return audioStatus.isGranted || storageStatus.isGranted;
   }
 
@@ -66,9 +83,6 @@ class MusicFolderService {
   }
 
   Future<bool> _requestIOSPermissions() async {
-    // En iOS, el acceso a carpetas externas se gestiona a través del FilePicker 
-    // y no requiere un permiso global de almacenamiento como en Android.
-    // MediaLibrary es opcional para la música del sistema.
     try {
       final status = await Permission.mediaLibrary.status;
       if (status.isDenied) {
@@ -77,9 +91,8 @@ class MusicFolderService {
     } catch (e) {
       debugPrint('Aviso iOS: MediaLibrary no disponible o no requerida');
     }
-    return true; // Permitimos continuar ya que el Picker maneja su propio permiso
+    return true; 
   }
-
 
   /// Selecciona y configura una carpeta de música
   Future<String?> selectMusicFolder() async {
@@ -89,7 +102,6 @@ class MusicFolderService {
       debugPrint('Plataforma: ${Platform.isAndroid ? 'Android' : 'iOS'}');
 
       String? selectedPath;
-
       if (Platform.isAndroid) {
         selectedPath = await FilePicker.getDirectoryPath();
       } else if (Platform.isIOS) {
@@ -105,12 +117,10 @@ class MusicFolderService {
           return null;
         }
 
-        // LIMPIAR SIEMPRE PARA ASEGURAR ESTADO FRESCO
         await stopMonitoring();
         onFolderCleared?.call();
 
-        await _prefs.setString(_folderPathKey, selectedPath);
-        _currentFolderPath = selectedPath;
+        await _savePath(selectedPath);
         onStatusChanged?.call('✅ Carpeta: ${p.basename(selectedPath)}');
         debugPrint('✅ Carpeta configurada: $selectedPath');
 
@@ -128,9 +138,6 @@ class MusicFolderService {
   Future<String?> _selectFolderOnIOS() async {
     try {
       debugPrint('📱 Intentando abrir selector de carpetas en iOS...');
-      
-      // Intentar usar FilePicker para obtener una ruta de directorio
-      // Nota: En iOS esto suele abrir el selector de iCloud/Archivos
       String? result = await FilePicker.getDirectoryPath();
 
       if (result != null) {
@@ -138,15 +145,12 @@ class MusicFolderService {
         return result;
       }
 
-      // Si el usuario cancela o falla, podemos sugerir la carpeta de documentos de la app
-      // como un lugar donde pueden mover su música mediante iTunes/Finder
       final appDocDir = await getApplicationDocumentsDirectory();
       debugPrint('ℹ️ Usando carpeta de documentos como alternativa: ${appDocDir.path}');
       return appDocDir.path;
       
     } catch (e) {
       debugPrint('⚠️ Error en _selectFolderOnIOS: $e');
-      // Fallback final
       final appDocDir = await getApplicationDocumentsDirectory();
       return appDocDir.path;
     }
