@@ -63,7 +63,7 @@ class MyAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
 
   void _initAudioPlayerStreams() {
     _player.playbackEventStream.map(_transformEvent).pipe(playbackState);
-    
+
     // Escuchar cambios en la duración para actualizar el MediaItem dinámicamente
     _player.durationStream.listen((d) {
       if (d != null && mediaItem.value != null) {
@@ -181,7 +181,7 @@ class FlacDownloadService {
       if (!await musicFolder.exists()) {
         await musicFolder.create(recursive: true);
       }
-      
+
       final tempDir = await getTemporaryDirectory();
       final downloadSessionId = DateTime.now().millisecondsSinceEpoch.toString();
       final tempFolderPath = p.join(tempDir.path, 'download_$downloadSessionId');
@@ -224,7 +224,7 @@ class FlacDownloadService {
 
       final String finalFileName = 'track_${DateTime.now().millisecondsSinceEpoch}.flac';
       final String finalDestinationPath = p.join(musicFolder.path, finalFileName);
-      
+
       // Usar writeAsBytes en lugar de copy para evitar problemas de permisos cruzados en algunos dispositivos Android
       final bytesToSave = await File(targetFlacPath).readAsBytes();
       final File finalFlacFile = File(finalDestinationPath);
@@ -358,7 +358,7 @@ class LyricsService {
         final minutes = int.parse(match.group(1)!);
         final seconds = double.parse(match.group(2)!);
         final text = match.group(3)!.trim();
-        
+
         if (text.isNotEmpty) {
           final timestamp = Duration(
             minutes: minutes,
@@ -1051,12 +1051,12 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
       final audioPaths = manifest.listAssets()
           .where((String key) => key.startsWith('assets/audios/'))
           .where((String key) =>
-              key.toLowerCase().endsWith('.mp3') ||
-              key.toLowerCase().endsWith('.flac') ||
-              key.toLowerCase().endsWith('.wav') ||
-              key.toLowerCase().endsWith('.m4a') ||
-              key.toLowerCase().endsWith('.aac') ||
-              key.toLowerCase().endsWith('.ogg'))
+      key.toLowerCase().endsWith('.mp3') ||
+          key.toLowerCase().endsWith('.flac') ||
+          key.toLowerCase().endsWith('.wav') ||
+          key.toLowerCase().endsWith('.m4a') ||
+          key.toLowerCase().endsWith('.aac') ||
+          key.toLowerCase().endsWith('.ogg'))
           .toList();
 
       if (audioPaths.isEmpty) return;
@@ -1279,7 +1279,7 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
         try {
           await _addFlacOrMusicFile(filePath, updateState: false);
           count++;
-          
+
           // Cada 5 archivos, le damos un respiro a la UI
           if (count % 5 == 0) {
             await Future.delayed(Duration.zero);
@@ -1290,7 +1290,7 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
         }
       }
     }
-    
+
     if (count > 0) {
       setState(() {});
       await _saveAlbumsToPrefs();
@@ -1796,223 +1796,226 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
                           color: Colors.transparent,
                           child: RepaintBoundary(
                             key: _shareCardKey,
-                            child: Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(24),
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(28),
-                                gradient: LinearGradient(
-                                  colors: [
-                                    dominantColor.withOpacity(0.95),
-                                    dominantColor.withOpacity(0.6),
-                                    Colors.black.withOpacity(0.9),
-                                  ],
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                ),
-                                border: Border.all(
-                                  color: Colors.white.withOpacity(0.12),
-                                  width: 1.2,
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withOpacity(0.6),
-                                    blurRadius: 30,
-                                    spreadRadius: 2,
-                                    offset: const Offset(0, 15),
+                            child: ClipRRect( // <-- 1. AQUÍ AGREGAS EL CLIPRRECT
+                              borderRadius: BorderRadius.circular(28), // <-- 2. MISMO RADIO QUE LA TARJETA
+                              child: Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(24),
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(28),
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      dominantColor.withOpacity(0.95),
+                                      dominantColor.withOpacity(0.6),
+                                      Colors.black.withOpacity(0.9),
+                                    ],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
                                   ),
-                                ],
-                              ),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          Container(
-                                            padding: const EdgeInsets.all(6),
-                                            decoration: BoxDecoration(
-                                              color: Colors.white.withOpacity(0.1),
-                                              shape: BoxShape.circle,
-                                            ),
-                                            child: const Icon(
-                                              Icons.graphic_eq_rounded,
-                                              color: Colors.white70,
-                                              size: 16,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          const Text(
-                                            'NOW PLAYING',
-                                            style: TextStyle(
-                                              color: Colors.white60,
-                                              fontSize: 10,
-                                              fontWeight: FontWeight.w700,
-                                              letterSpacing: 1.5,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                        decoration: BoxDecoration(
-                                          color: Colors.white.withOpacity(0.15),
-                                          borderRadius: BorderRadius.circular(14),
-                                          border: Border.all(
-                                            color: Colors.white.withOpacity(0.2),
-                                            width: 0.8,
-                                          ),
-                                        ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
+                                  border: Border.all(
+                                    color: Colors.white.withOpacity(0.12),
+                                    width: 1.2,
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.6),
+                                      blurRadius: 30,
+                                      spreadRadius: 2,
+                                      offset: const Offset(0, 15),
+                                    ),
+                                  ],
+                                ),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Row(
                                           children: [
-                                            ClipRRect(
-                                              borderRadius: BorderRadius.circular(6),
-                                              child: Image.asset(
-                                                'assets/ojo.gif',
-                                                width: 16,
-                                                height: 16,
-                                                fit: BoxFit.cover,
-                                                errorBuilder: (context, error, stackTrace) =>
-                                                    const Icon(Icons.remove_red_eye, color: Colors.white, size: 14),
+                                            Container(
+                                              padding: const EdgeInsets.all(6),
+                                              decoration: BoxDecoration(
+                                                color: Colors.white.withOpacity(0.1),
+                                                shape: BoxShape.circle,
+                                              ),
+                                              child: const Icon(
+                                                Icons.graphic_eq_rounded,
+                                                color: Colors.white70,
+                                                size: 16,
                                               ),
                                             ),
-                                            const SizedBox(width: 6),
+                                            const SizedBox(width: 8),
                                             const Text(
-                                              'BIN Music',
+                                              'NOW PLAYING',
                                               style: TextStyle(
-                                                color: Colors.white,
-                                                fontSize: 11,
-                                                fontWeight: FontWeight.w900,
-                                                letterSpacing: 0.8,
+                                                color: Colors.white60,
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.w700,
+                                                letterSpacing: 1.5,
                                               ),
                                             ),
                                           ],
                                         ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 24),
-                                  Center(
-                                    child: Stack(
-                                      alignment: Alignment.center,
-                                      children: [
                                         Container(
-                                          width: 210,
-                                          height: 210,
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                           decoration: BoxDecoration(
-                                            borderRadius: BorderRadius.circular(20),
-                                            boxShadow: [
-                                              BoxShadow(
-                                                color: dominantColor.withOpacity(0.4),
-                                                blurRadius: 45,
-                                                spreadRadius: 8,
+                                            color: Colors.white.withOpacity(0.15),
+                                            borderRadius: BorderRadius.circular(14),
+                                            border: Border.all(
+                                              color: Colors.white.withOpacity(0.2),
+                                              width: 0.8,
+                                            ),
+                                          ),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              ClipRRect(
+                                                borderRadius: BorderRadius.circular(6),
+                                                child: Image.asset(
+                                                  'assets/ojo.gif',
+                                                  width: 16,
+                                                  height: 16,
+                                                  fit: BoxFit.cover,
+                                                  errorBuilder: (context, error, stackTrace) =>
+                                                  const Icon(Icons.remove_red_eye, color: Colors.white, size: 14),
+                                                ),
                                               ),
-                                              BoxShadow(
-                                                color: Colors.black.withOpacity(0.7),
-                                                blurRadius: 25,
-                                                offset: const Offset(0, 12),
+                                              const SizedBox(width: 6),
+                                              const Text(
+                                                'BIN Music',
+                                                style: TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w900,
+                                                  letterSpacing: 0.8,
+                                                ),
                                               ),
                                             ],
                                           ),
                                         ),
-                                        ClipRRect(
-                                          borderRadius: BorderRadius.circular(20),
-                                          child: SizedBox(
-                                            width: 220,
-                                            height: 220,
-                                            child: _buildAlbumImage(albumImage),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 24),
+                                    Center(
+                                      child: Stack(
+                                        alignment: Alignment.center,
+                                        children: [
+                                          Container(
+                                            width: 210,
+                                            height: 210,
+                                            decoration: BoxDecoration(
+                                              borderRadius: BorderRadius.circular(20),
+                                              boxShadow: [
+                                                BoxShadow(
+                                                  color: dominantColor.withOpacity(0.4),
+                                                  blurRadius: 45,
+                                                  spreadRadius: 8,
+                                                ),
+                                                BoxShadow(
+                                                  color: Colors.black.withOpacity(0.7),
+                                                  blurRadius: 25,
+                                                  offset: const Offset(0, 12),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          ClipRRect(
+                                            borderRadius: BorderRadius.circular(20),
+                                            child: SizedBox(
+                                              width: 220,
+                                              height: 220,
+                                              child: _buildAlbumImage(albumImage),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(height: 26),
+                                    Row(
+                                      crossAxisAlignment: CrossAxisAlignment.end,
+                                      children: [
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                songTitle,
+                                                style: const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 21,
+                                                  fontWeight: FontWeight.bold,
+                                                  letterSpacing: -0.5,
+                                                ),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                artistName,
+                                                style: TextStyle(
+                                                  color: Colors.white.withOpacity(0.8),
+                                                  fontSize: 15,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                albumTitle,
+                                                style: TextStyle(
+                                                  color: Colors.white.withOpacity(0.45),
+                                                  fontSize: 12,
+                                                ),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        Material(
+                                          color: Colors.transparent,
+                                          child: InkWell(
+                                            borderRadius: BorderRadius.circular(16),
+                                            onTap: () async {
+                                              final imageUint8List = await _screenshotController.capture(
+                                                delay: const Duration(milliseconds: 150),
+                                              );
+                                              if (imageUint8List != null) {
+                                                final tempDir = await getTemporaryDirectory();
+                                                final file = File('${tempDir.path}/share_track.png');
+                                                await file.writeAsBytes(imageUint8List);
+                                                await Share.shareXFiles(
+                                                  [XFile(file.path, mimeType: 'image/png')],
+                                                  text: '¡Escuchando "$songTitle" de $artistName en BIN Music! 🎵',
+                                                );
+                                                if (ctx.mounted) Navigator.pop(ctx);
+                                              }
+                                            },
+                                            child: Container(
+                                              padding: const EdgeInsets.all(12),
+                                              decoration: BoxDecoration(
+                                                color: Colors.white.withOpacity(0.12),
+                                                borderRadius: BorderRadius.circular(16),
+                                                border: Border.all(
+                                                  color: Colors.white.withOpacity(0.2),
+                                                  width: 1,
+                                                ),
+                                              ),
+                                              child: const Icon(
+                                                Icons.ios_share_rounded,
+                                                color: Colors.white,
+                                                size: 20,
+                                              ),
+                                            ),
                                           ),
                                         ),
                                       ],
                                     ),
-                                  ),
-                                  const SizedBox(height: 26),
-                                  Row(
-                                    crossAxisAlignment: CrossAxisAlignment.end,
-                                    children: [
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              songTitle,
-                                              style: const TextStyle(
-                                                color: Colors.white,
-                                                fontSize: 21,
-                                                fontWeight: FontWeight.bold,
-                                                letterSpacing: -0.5,
-                                              ),
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                            const SizedBox(height: 4),
-                                            Text(
-                                              artistName,
-                                              style: TextStyle(
-                                                color: Colors.white.withOpacity(0.8),
-                                                fontSize: 15,
-                                                fontWeight: FontWeight.w500,
-                                              ),
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                            const SizedBox(height: 2),
-                                            Text(
-                                              albumTitle,
-                                              style: TextStyle(
-                                                color: Colors.white.withOpacity(0.45),
-                                                fontSize: 12,
-                                              ),
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      Material(
-                                        color: Colors.transparent,
-                                        child: InkWell(
-                                          borderRadius: BorderRadius.circular(16),
-                                          onTap: () async {
-                                            final imageUint8List = await _screenshotController.capture(
-                                              delay: const Duration(milliseconds: 150),
-                                            );
-                                            if (imageUint8List != null) {
-                                              final tempDir = await getTemporaryDirectory();
-                                              final file = File('${tempDir.path}/share_track.png');
-                                              await file.writeAsBytes(imageUint8List);
-                                              await Share.shareXFiles(
-                                                [XFile(file.path, mimeType: 'image/png')],
-                                                text: '¡Escuchando "$songTitle" de $artistName en BIN Music! 🎵',
-                                              );
-                                              if (ctx.mounted) Navigator.pop(ctx);
-                                            }
-                                          },
-                                          child: Container(
-                                            padding: const EdgeInsets.all(12),
-                                            decoration: BoxDecoration(
-                                              color: Colors.white.withOpacity(0.12),
-                                              borderRadius: BorderRadius.circular(16),
-                                              border: Border.all(
-                                                color: Colors.white.withOpacity(0.2),
-                                                width: 1,
-                                              ),
-                                            ),
-                                            child: const Icon(
-                                              Icons.ios_share_rounded,
-                                              color: Colors.white,
-                                              size: 20,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
                             ),
                           ),
@@ -2320,155 +2323,155 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
                 Expanded(
                   child: albumList.isEmpty
                       ? Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Text(
-                                'No hay música en la biblioteca',
-                                style: TextStyle(color: Colors.white70, fontSize: 16),
-                              ),
-                              const SizedBox(height: 12),
-                              ElevatedButton.icon(
-                                onPressed: _selectMusicFolderAction,
-                                icon: const Icon(Icons.folder_open),
-                                label: const Text('Vincular carpeta'),
-                              ),
-                            ],
-                          ),
-                        )
-                      : AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 500),
-                          transitionBuilder: (Widget child, Animation<double> animation) {
-                            return FadeTransition(
-                              opacity: animation,
-                              child: ScaleTransition(
-                                scale: Tween<double>(begin: 0.9, end: 1.0).animate(
-                                  CurvedAnimation(parent: animation, curve: Curves.easeOutBack),
-                                ),
-                                child: child,
-                              ),
-                            );
-                          },
-                          child: _showLyricsView
-                              ? Container(
-                                  key: const ValueKey('lyrics_view'),
-                                  margin: const EdgeInsets.symmetric(horizontal: 10),
-                                  child: LyricsBottomSheet(
-                                    trackName: currentTitle,
-                                    artistName: currentArtist,
-                                    albumName: currentAlbumName,
-                                    duration: _duration,
-                                    positionStream: _audioPlayer.positionStream,
-                                    player: _audioPlayer,
-                                    onClose: () => setState(() => _showLyricsView = false),
-                                  ),
-                                )
-                              : _showTracklistView
-                                  ? Container(
-                                      key: const ValueKey('tracklist_view'),
-                                      margin: const EdgeInsets.symmetric(horizontal: 20),
-                                      child: TracklistView(
-                                        album: albumList[_selectedTracklistAlbumIndex],
-                                        currentPlayingAlbumIndex: _currentPlayingAlbumIndex,
-                                        currentSongInAlbumIndex: _currentSongInAlbumIndex,
-                                        isPlaying: _isPlaying,
-                                        onSongTap: (idx) async {
-                                          await _playSongInAlbum(_selectedTracklistAlbumIndex, idx);
-                                        },
-                                        onClose: () {
-                                          setState(() {
-                                            _showTracklistView = false;
-                                          });
-                                          // Sincronizar carrusel
-                                          WidgetsBinding.instance.addPostFrameCallback((_) {
-                                            if (_pageController.hasClients) {
-                                              _pageController.jumpToPage(_selectedTracklistAlbumIndex);
-                                            }
-                                          });
-                                        },
-                                        onDeleteAlbum: () async {
-                                          final confirm = await _showConfirmDeleteDialog(
-                                            title: 'Eliminar álbum',
-                                            content: '¿Estás seguro de que deseas eliminar "${albumList[_selectedTracklistAlbumIndex].title}"?',
-                                          );
-                                          if (confirm) {
-                                            int idx = _selectedTracklistAlbumIndex;
-                                            setState(() => _showTracklistView = false);
-                                            await _deleteAlbum(idx);
-                                          }
-                                        },
-                                        onDeleteSong: (idx) async {
-                                          final song = albumList[_selectedTracklistAlbumIndex].songs[idx];
-                                          final confirm = await _showConfirmDeleteDialog(
-                                            title: 'Eliminar canción',
-                                            content: '¿Deseas eliminar "${song['title'] ?? 'esta canción'}"?',
-                                          );
-                                          if (confirm) {
-                                            await _deleteSong(_selectedTracklistAlbumIndex, idx);
-                                            if (albumList.length > _selectedTracklistAlbumIndex && albumList[_selectedTracklistAlbumIndex].songs.isNotEmpty) {
-                                              setState(() {});
-                                            } else {
-                                              setState(() => _showTracklistView = false);
-                                            }
-                                          }
-                                        },
-                                      ),
-                                    )
-                                  : AnimatedBuilder(
-                                  key: const ValueKey('album_view'),
-                                  animation: _pageController,
-                                  builder: (context, child) {
-                                    double page = _pageController.hasClients && _pageController.position.haveDimensions ? _pageController.page ?? 0.0 : 0.0;
-
-                                    List<int> sortedIndices = List.generate(albumList.length, (i) => i);
-                                    sortedIndices.sort((a, b) {
-                                      double distA = (page - a).abs();
-                                      double distB = (page - b).abs();
-                                      return distB.compareTo(distA);
-                                    });
-
-                                    return Stack(
-                                      alignment: Alignment.center,
-                                      children: [
-                                        ...sortedIndices.map((i) {
-                                          return Center(
-                                            child: _buildAnimatedAlbumCard(i, page),
-                                          );
-                                        }),
-                                        Positioned.fill(
-                                          child: PageView.builder(
-                                            controller: _pageController,
-                                            physics: const BouncingScrollPhysics(),
-                                            itemCount: albumList.length,
-                                            itemBuilder: (context, index) {
-                                              return GestureDetector(
-                                                behavior: HitTestBehavior.translucent,
-                                                onTap: () {
-                                                  int activePage = page.round();
-                                                  if (index == activePage) {
-                                                    setState(() {
-                                                      _selectedTracklistAlbumIndex = index;
-                                                      _showTracklistView = true;
-                                                      _showLyricsView = false;
-                                                    });
-                                                  } else {
-                                                    _pageController.animateToPage(
-                                                      index,
-                                                      duration: const Duration(milliseconds: 280),
-                                                      curve: Curves.easeOutCubic,
-                                                    );
-                                                  }
-                                                },
-                                                child: const SizedBox.expand(),
-                                              );
-                                            },
-                                          ),
-                                        ),
-                                      ],
-                                    );
-                                  },
-                                ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text(
+                          'No hay música en la biblioteca',
+                          style: TextStyle(color: Colors.white70, fontSize: 16),
                         ),
+                        const SizedBox(height: 12),
+                        ElevatedButton.icon(
+                          onPressed: _selectMusicFolderAction,
+                          icon: const Icon(Icons.folder_open),
+                          label: const Text('Vincular carpeta'),
+                        ),
+                      ],
+                    ),
+                  )
+                      : AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 500),
+                    transitionBuilder: (Widget child, Animation<double> animation) {
+                      return FadeTransition(
+                        opacity: animation,
+                        child: ScaleTransition(
+                          scale: Tween<double>(begin: 0.9, end: 1.0).animate(
+                            CurvedAnimation(parent: animation, curve: Curves.easeOutBack),
+                          ),
+                          child: child,
+                        ),
+                      );
+                    },
+                    child: _showLyricsView
+                        ? Container(
+                      key: const ValueKey('lyrics_view'),
+                      margin: const EdgeInsets.symmetric(horizontal: 10),
+                      child: LyricsBottomSheet(
+                        trackName: currentTitle,
+                        artistName: currentArtist,
+                        albumName: currentAlbumName,
+                        duration: _duration,
+                        positionStream: _audioPlayer.positionStream,
+                        player: _audioPlayer,
+                        onClose: () => setState(() => _showLyricsView = false),
+                      ),
+                    )
+                        : _showTracklistView
+                        ? Container(
+                      key: const ValueKey('tracklist_view'),
+                      margin: const EdgeInsets.symmetric(horizontal: 20),
+                      child: TracklistView(
+                        album: albumList[_selectedTracklistAlbumIndex],
+                        currentPlayingAlbumIndex: _currentPlayingAlbumIndex,
+                        currentSongInAlbumIndex: _currentSongInAlbumIndex,
+                        isPlaying: _isPlaying,
+                        onSongTap: (idx) async {
+                          await _playSongInAlbum(_selectedTracklistAlbumIndex, idx);
+                        },
+                        onClose: () {
+                          setState(() {
+                            _showTracklistView = false;
+                          });
+                          // Sincronizar carrusel
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (_pageController.hasClients) {
+                              _pageController.jumpToPage(_selectedTracklistAlbumIndex);
+                            }
+                          });
+                        },
+                        onDeleteAlbum: () async {
+                          final confirm = await _showConfirmDeleteDialog(
+                            title: 'Eliminar álbum',
+                            content: '¿Estás seguro de que deseas eliminar "${albumList[_selectedTracklistAlbumIndex].title}"?',
+                          );
+                          if (confirm) {
+                            int idx = _selectedTracklistAlbumIndex;
+                            setState(() => _showTracklistView = false);
+                            await _deleteAlbum(idx);
+                          }
+                        },
+                        onDeleteSong: (idx) async {
+                          final song = albumList[_selectedTracklistAlbumIndex].songs[idx];
+                          final confirm = await _showConfirmDeleteDialog(
+                            title: 'Eliminar canción',
+                            content: '¿Deseas eliminar "${song['title'] ?? 'esta canción'}"?',
+                          );
+                          if (confirm) {
+                            await _deleteSong(_selectedTracklistAlbumIndex, idx);
+                            if (albumList.length > _selectedTracklistAlbumIndex && albumList[_selectedTracklistAlbumIndex].songs.isNotEmpty) {
+                              setState(() {});
+                            } else {
+                              setState(() => _showTracklistView = false);
+                            }
+                          }
+                        },
+                      ),
+                    )
+                        : AnimatedBuilder(
+                      key: const ValueKey('album_view'),
+                      animation: _pageController,
+                      builder: (context, child) {
+                        double page = _pageController.hasClients && _pageController.position.haveDimensions ? _pageController.page ?? 0.0 : 0.0;
+
+                        List<int> sortedIndices = List.generate(albumList.length, (i) => i);
+                        sortedIndices.sort((a, b) {
+                          double distA = (page - a).abs();
+                          double distB = (page - b).abs();
+                          return distB.compareTo(distA);
+                        });
+
+                        return Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            ...sortedIndices.map((i) {
+                              return Center(
+                                child: _buildAnimatedAlbumCard(i, page),
+                              );
+                            }),
+                            Positioned.fill(
+                              child: PageView.builder(
+                                controller: _pageController,
+                                physics: const BouncingScrollPhysics(),
+                                itemCount: albumList.length,
+                                itemBuilder: (context, index) {
+                                  return GestureDetector(
+                                    behavior: HitTestBehavior.translucent,
+                                    onTap: () {
+                                      int activePage = page.round();
+                                      if (index == activePage) {
+                                        setState(() {
+                                          _selectedTracklistAlbumIndex = index;
+                                          _showTracklistView = true;
+                                          _showLyricsView = false;
+                                        });
+                                      } else {
+                                        _pageController.animateToPage(
+                                          index,
+                                          duration: const Duration(milliseconds: 280),
+                                          curve: Curves.easeOutCubic,
+                                        );
+                                      }
+                                    },
+                                    child: const SizedBox.expand(),
+                                  );
+                                },
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
                 ),
                 // --- BOTÓN DE LETRAS / CERRAR CENTRADO ---
                 if (albumList.isNotEmpty && (currentTitle != 'Sin canción' || _showLyricsView || _showTracklistView))
@@ -2479,10 +2482,10 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
                         onTap: () {
                           if (_showLyricsView || _showTracklistView) {
                             // Al cerrar, asegurarnos de volver al álbum correcto
-                            final targetPage = _showTracklistView 
-                                ? _selectedTracklistAlbumIndex 
+                            final targetPage = _showTracklistView
+                                ? _selectedTracklistAlbumIndex
                                 : (_currentPlayingAlbumIndex != -1 ? _currentPlayingAlbumIndex : _getCurrentPageIndex());
-                            
+
                             setState(() {
                               _showLyricsView = false;
                               _showTracklistView = false;
@@ -2787,74 +2790,74 @@ class AlbumGridScreen extends StatelessWidget {
       ),
       body: albums.isEmpty
           ? const Center(
-              child: Text(
-                'No hay música en la biblioteca',
-                style: TextStyle(color: Colors.white38),
-              ),
-            )
+        child: Text(
+          'No hay música en la biblioteca',
+          style: TextStyle(color: Colors.white38),
+        ),
+      )
           : GridView.builder(
-              padding: const EdgeInsets.all(20),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
-                crossAxisSpacing: 20,
-                mainAxisSpacing: 24,
-                childAspectRatio: 0.75,
-              ),
-              itemCount: albums.length,
-              itemBuilder: (context, index) {
-                final album = albums[index];
-                return GestureDetector(
-                  onTap: () {
-                    onAlbumTap(index);
-                    Navigator.pop(context);
-                  },
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Container(
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(12),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.5),
-                                blurRadius: 15,
-                                offset: const Offset(0, 8),
-                              ),
-                            ],
-                          ),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(12),
-                            child: _buildGridImage(album.image),
-                          ),
+        padding: const EdgeInsets.all(20),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          crossAxisSpacing: 20,
+          mainAxisSpacing: 24,
+          childAspectRatio: 0.75,
+        ),
+        itemCount: albums.length,
+        itemBuilder: (context, index) {
+          final album = albums[index];
+          return GestureDetector(
+            onTap: () {
+              onAlbumTap(index);
+              Navigator.pop(context);
+            },
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.5),
+                          blurRadius: 15,
+                          offset: const Offset(0, 8),
                         ),
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        album.title,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        album.artist,
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.5),
-                          fontSize: 12,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
+                      ],
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: _buildGridImage(album.image),
+                    ),
                   ),
-                );
-              },
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  album.title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  album.artist,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.5),
+                    fontSize: 12,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
             ),
+          );
+        },
+      ),
     );
   }
 }
@@ -2937,57 +2940,57 @@ class _LyricsBottomSheetState extends State<LyricsBottomSheet> {
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator(color: Colors.white70))
                 : _lyrics == null || _lyrics!.isEmpty
-                    ? const Center(child: Text('Letras no disponibles', style: TextStyle(color: Colors.white38)))
-                    : StreamBuilder<Duration>(
-                        stream: widget.positionStream,
-                        builder: (context, snapshot) {
-                          final position = snapshot.data ?? Duration.zero;
-                          
-                          int index = _lyrics!.indexWhere((line) => line.timestamp > position) - 1;
-                          if (index == -2) index = _lyrics!.length - 1;
-                          
-                          if (index != _currentLineIndex && index >= 0) {
-                            _currentLineIndex = index;
-                            WidgetsBinding.instance.addPostFrameCallback((_) {
-                              if (_scrollController.hasClients) {
-                                _scrollController.animateTo(
-                                  index * 70.0, 
-                                  duration: const Duration(milliseconds: 400),
-                                  curve: Curves.easeOutCubic,
-                                );
-                              }
-                            });
-                          }
+                ? const Center(child: Text('Letras no disponibles', style: TextStyle(color: Colors.white38)))
+                : StreamBuilder<Duration>(
+              stream: widget.positionStream,
+              builder: (context, snapshot) {
+                final position = snapshot.data ?? Duration.zero;
 
-                          return ListView.builder(
-                            controller: _scrollController,
-                            itemCount: _lyrics!.length,
-                            padding: const EdgeInsets.only(bottom: 200, top: 40),
-                            itemBuilder: (context, i) {
-                              final isCurrent = i == _currentLineIndex;
-                              return GestureDetector(
-                                onTap: () => widget.player.seek(_lyrics![i].timestamp),
-                                child: Container(
-                                  constraints: const BoxConstraints(minHeight: 70),
-                                  padding: const EdgeInsets.symmetric(vertical: 8),
-                                  alignment: Alignment.center,
-                                  child: AnimatedDefaultTextStyle(
-                                    duration: const Duration(milliseconds: 300),
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(
-                                      color: isCurrent ? Colors.white : Colors.white.withOpacity(0.2),
-                                      fontSize: isCurrent ? 26 : 18,
-                                      fontWeight: isCurrent ? FontWeight.bold : FontWeight.w600,
-                                      height: 1.3,
-                                    ),
-                                    child: Text(_lyrics![i].text),
-                                  ),
-                                ),
-                              );
-                            },
-                          );
-                        },
+                int index = _lyrics!.indexWhere((line) => line.timestamp > position) - 1;
+                if (index == -2) index = _lyrics!.length - 1;
+
+                if (index != _currentLineIndex && index >= 0) {
+                  _currentLineIndex = index;
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (_scrollController.hasClients) {
+                      _scrollController.animateTo(
+                        index * 70.0,
+                        duration: const Duration(milliseconds: 400),
+                        curve: Curves.easeOutCubic,
+                      );
+                    }
+                  });
+                }
+
+                return ListView.builder(
+                  controller: _scrollController,
+                  itemCount: _lyrics!.length,
+                  padding: const EdgeInsets.only(bottom: 200, top: 40),
+                  itemBuilder: (context, i) {
+                    final isCurrent = i == _currentLineIndex;
+                    return GestureDetector(
+                      onTap: () => widget.player.seek(_lyrics![i].timestamp),
+                      child: Container(
+                        constraints: const BoxConstraints(minHeight: 70),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        alignment: Alignment.center,
+                        child: AnimatedDefaultTextStyle(
+                          duration: const Duration(milliseconds: 300),
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: isCurrent ? Colors.white : Colors.white.withOpacity(0.2),
+                            fontSize: isCurrent ? 26 : 18,
+                            fontWeight: isCurrent ? FontWeight.bold : FontWeight.w600,
+                            height: 1.3,
+                          ),
+                          child: Text(_lyrics![i].text),
+                        ),
                       ),
+                    );
+                  },
+                );
+              },
+            ),
           ),
         ],
       ),
@@ -3102,12 +3105,12 @@ class TracklistView extends StatelessWidget {
                       child: isSelected && isPlaying
                           ? const Icon(Icons.volume_up_rounded, color: Colors.white, size: 18)
                           : Text(
-                              '$trackNum',
-                              style: TextStyle(
-                                color: isSelected ? Colors.white : Colors.white38,
-                                fontSize: 13,
-                              ),
-                            ),
+                        '$trackNum',
+                        style: TextStyle(
+                          color: isSelected ? Colors.white : Colors.white38,
+                          fontSize: 13,
+                        ),
+                      ),
                     ),
                   ),
                   title: Text(

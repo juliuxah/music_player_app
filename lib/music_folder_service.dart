@@ -25,11 +25,11 @@ class MusicFolderService {
   Future<void> initialize() async {
     _prefs = await SharedPreferences.getInstance();
     final savedPath = _prefs.getString(_folderPathKey);
-    
+
     if (savedPath != null) {
       // Resolver la ruta real (especialmente importante en iOS donde los IDs de contenedor cambian)
       _currentFolderPath = await _resolvePath(savedPath);
-      
+
       if (_currentFolderPath != null && await Directory(_currentFolderPath!).exists()) {
         debugPrint('✅ Carpeta auto-detectada: $_currentFolderPath');
         _startMonitoringFolder(_currentFolderPath!);
@@ -91,7 +91,7 @@ class MusicFolderService {
     } catch (e) {
       debugPrint('Aviso iOS: MediaLibrary no disponible o no requerida');
     }
-    return true; 
+    return true;
   }
 
   /// Selecciona y configura una carpeta de música
@@ -148,7 +148,7 @@ class MusicFolderService {
       final appDocDir = await getApplicationDocumentsDirectory();
       debugPrint('ℹ️ Usando carpeta de documentos como alternativa: ${appDocDir.path}');
       return appDocDir.path;
-      
+
     } catch (e) {
       debugPrint('⚠️ Error en _selectFolderOnIOS: $e');
       final appDocDir = await getApplicationDocumentsDirectory();
