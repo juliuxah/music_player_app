@@ -222,8 +222,38 @@ class FlacDownloadService {
 
       onProgress(0.98, 'Guardando en la biblioteca...');
 
-      final String finalFileName = 'track_${DateTime.now().millisecondsSinceEpoch}.flac';
-      final String finalDestinationPath = p.join(musicFolder.path, finalFileName);
+      String title = 'track';
+      String artist = '';
+      try {
+        final tagFile = TagLibFile.open(targetFlacPath);
+        if (tagFile != null) {
+          if (tagFile.title != null && tagFile.title!.isNotEmpty) title = tagFile.title!;
+          if (tagFile.artist != null && tagFile.artist!.isNotEmpty) artist = tagFile.artist!;
+          tagFile.close();
+        }
+      } catch (_) {}
+
+      // Limpiar nombres de caracteres no permitidos en sistemas de archivos
+      String safeTitle = title.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_').trim();
+      String safeArtist = artist.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_').trim();
+
+      String finalFileName;
+      if (safeArtist.isNotEmpty) {
+        finalFileName = '$safeTitle - $safeArtist.flac';
+      } else {
+        finalFileName = '$safeTitle.flac';
+      }
+
+      // Evitar colisiones de nombres si el archivo ya existe
+      String finalDestinationPath = p.join(musicFolder.path, finalFileName);
+      int counter = 1;
+      while (await File(finalDestinationPath).exists()) {
+        finalFileName = safeArtist.isNotEmpty
+            ? '$safeTitle - $safeArtist ($counter).flac'
+            : '$safeTitle ($counter).flac';
+        finalDestinationPath = p.join(musicFolder.path, finalFileName);
+        counter++;
+      }
 
       // Usar writeAsBytes en lugar de copy para evitar problemas de permisos cruzados en algunos dispositivos Android
       final bytesToSave = await File(targetFlacPath).readAsBytes();
@@ -843,7 +873,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
   Duration _position = Duration.zero;
   bool _isSeeking = false;
   double _dragValue = 0.0;
-  double _volume = 0.8;
 
   List<AlbumModel> albumList = [];
   int _currentPlayingAlbumIndex = -1;
@@ -861,7 +890,7 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
     _pageController = PageController(viewportFraction: 0.5, initialPage: 0);
     checkForUpdates(context);
 
-    _audioPlayer.setVolume(_volume);
+    _audioPlayer.setVolume(1.0);
 
     // Escuchar el cambio de índice nativo (funciona perfecto en segundo plano en iOS)
     _audioPlayer.currentIndexStream.listen((index) {
@@ -1546,6 +1575,21 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
       return;
     }
 
+    if (Platform.isIOS) {
+      // En iOS, selección manual de archivos (soporta selección múltiple)
+      final files = await widget.musicFolderService.selectMusicFiles();
+      if (files.isNotEmpty) {
+        await _loadMusicFilesFromFolder(files);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('${files.length} canciones agregadas')),
+          );
+        }
+      }
+      return;
+    }
+
+    // En Android, seguimos con el flujo de carpeta vinculada e importación automática
     final selectedPath = await widget.musicFolderService.selectMusicFolder();
     if (selectedPath != null) {
       final files = await widget.musicFolderService.scanMusicFolder();
@@ -1606,7 +1650,7 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
         filePath: path,
       );
 
-      await _audioPlayer.setVolume(_volume);
+      await _audioPlayer.setVolume(1.0);
 
       // 2. Establecer la playlist nativa en just_audio e indicar el índice inicial
       await _audioPlayer.setAudioSource(
@@ -1751,6 +1795,25 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
     }
   }
 
+  void _closeLyricsOrTracklist() {
+    if (_showLyricsView || _showTracklistView) {
+      final targetPage = _showTracklistView
+          ? _selectedTracklistAlbumIndex
+          : (_currentPlayingAlbumIndex != -1 ? _currentPlayingAlbumIndex : _getCurrentPageIndex());
+
+      setState(() {
+        _showLyricsView = false;
+        _showTracklistView = false;
+      });
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_pageController.hasClients) {
+          _pageController.jumpToPage(targetPage);
+        }
+      });
+    }
+  }
+
   final ScreenshotController _screenshotController = ScreenshotController();
 
   void _showShareSongCard({
@@ -1830,34 +1893,8 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Row(
-                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      mainAxisAlignment: MainAxisAlignment.end,
                                       children: [
-                                        Row(
-                                          children: [
-                                            Container(
-                                              padding: const EdgeInsets.all(6),
-                                              decoration: BoxDecoration(
-                                                color: Colors.white.withOpacity(0.1),
-                                                shape: BoxShape.circle,
-                                              ),
-                                              child: const Icon(
-                                                Icons.graphic_eq_rounded,
-                                                color: Colors.white70,
-                                                size: 16,
-                                              ),
-                                            ),
-                                            const SizedBox(width: 8),
-                                            const Text(
-                                              'NOW PLAYING',
-                                              style: TextStyle(
-                                                color: Colors.white60,
-                                                fontSize: 10,
-                                                fontWeight: FontWeight.w700,
-                                                letterSpacing: 1.5,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
                                         Container(
                                           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                           decoration: BoxDecoration(
@@ -2222,9 +2259,27 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
         : _position.inMilliseconds.toDouble().clamp(0.0, maxDurationMs > 0 ? maxDurationMs : 1.0);
 
     return Scaffold(
-      body: Stack(
-        children: [
-          if (activeAlbum != null)
+      body: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onVerticalDragEnd: (details) {
+          if (details.primaryVelocity == null) return;
+
+          // Deslizar hacia arriba (Cualquier movimiento < -50) para mostrar letras
+          if (details.primaryVelocity! < -50) {
+            if (!_showLyricsView && !_showTracklistView) {
+              setState(() {
+                _showLyricsView = true;
+              });
+            }
+          }
+          // Deslizar hacia abajo (Cualquier movimiento > 50) para quitar letras y volver al álbum
+          else if (details.primaryVelocity! > 50) {
+            _closeLyricsOrTracklist();
+          }
+        },
+        child: Stack(
+          children: [
+            if (activeAlbum != null)
             Positioned.fill(
               child: AnimatedSwitcher(
                 duration: const Duration(milliseconds: 600),
@@ -2251,7 +2306,7 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
             ),
           SafeArea(
             child: Column(
-              children: [
+                children: [
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
                   child: Row(
@@ -2264,6 +2319,9 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
                             MaterialPageRoute(
                               builder: (context) => AlbumGridScreen(
                                 albums: albumList,
+                                musicFolderService: widget.musicFolderService,
+                                onAddFolder: _selectMusicFolderAction,
+                                onDownloadComplete: _processDownloadedFlac,
                                 onAlbumTap: (index) {
                                   setState(() {
                                     _showLyricsView = false;
@@ -2294,27 +2352,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
                           fontWeight: FontWeight.w900,
                           letterSpacing: 0.5,
                         ),
-                      ),
-                      const Spacer(),
-                      IconButton(
-                        icon: const Icon(Icons.public_rounded, color: Colors.white, size: 26),
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => FlacWebBrowserScreen(
-                                musicFolderService: widget.musicFolderService,
-                                onDownloadComplete: (flacFile) => _processDownloadedFlac(flacFile),
-                              ),
-                            ),
-                          );
-                        },
-                        tooltip: 'Navegar a Flac Downloader Web',
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.add_circle_outline_rounded, color: Colors.white, size: 26),
-                        onPressed: _selectMusicFolderAction,
-                        tooltip: 'Vincular carpeta de música',
                       ),
                     ],
                   ),
@@ -2372,7 +2409,7 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
                       margin: const EdgeInsets.symmetric(horizontal: 20),
                       child: TracklistView(
                         album: albumList[_selectedTracklistAlbumIndex],
-                        currentPlayingAlbumIndex: _currentPlayingAlbumIndex,
+                        isCurrentAlbum: _selectedTracklistAlbumIndex == _currentPlayingAlbumIndex,
                         currentSongInAlbumIndex: _currentSongInAlbumIndex,
                         isPlaying: _isPlaying,
                         onSongTap: (idx) async {
@@ -2473,64 +2510,24 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
                     ),
                   ),
                 ),
-                // --- BOTÓN DE LETRAS / CERRAR CENTRADO ---
+                // --- INDICADOR DE DIRECCIÓN (FLECHITA) ---
                 if (albumList.isNotEmpty && (currentTitle != 'Sin canción' || _showLyricsView || _showTracklistView))
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8.0),
-                    child: Center(
-                      child: GestureDetector(
-                        onTap: () {
-                          if (_showLyricsView || _showTracklistView) {
-                            // Al cerrar, asegurarnos de volver al álbum correcto
-                            final targetPage = _showTracklistView
-                                ? _selectedTracklistAlbumIndex
-                                : (_currentPlayingAlbumIndex != -1 ? _currentPlayingAlbumIndex : _getCurrentPageIndex());
-
-                            setState(() {
-                              _showLyricsView = false;
-                              _showTracklistView = false;
-                            });
-
-                            // Esperar a que el PageView se monte para hacer el salto
-                            WidgetsBinding.instance.addPostFrameCallback((_) {
-                              if (_pageController.hasClients) {
-                                _pageController.jumpToPage(targetPage);
-                              }
-                            });
-                          } else {
-                            setState(() {
-                              _showLyricsView = true;
-                            });
-                          }
-                        },
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 300),
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: (_showLyricsView || _showTracklistView) ? Colors.white.withOpacity(0.2) : Colors.white.withOpacity(0.08),
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: (_showLyricsView || _showTracklistView) ? Colors.white30 : Colors.white10),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                (_showLyricsView || _showTracklistView) ? Icons.keyboard_arrow_down_rounded : Icons.lyrics_rounded,
-                                color: Colors.white70,
-                                size: 14,
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                (_showLyricsView || _showTracklistView) ? 'CERRAR' : 'LETRAS',
-                                style: TextStyle(
-                                  color: Colors.white.withOpacity(0.6),
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  letterSpacing: 1.2,
-                                ),
-                              ),
-                            ],
-                          ),
+                  GestureDetector(
+                    onTap: () {
+                      if (_showLyricsView || _showTracklistView) {
+                        _closeLyricsOrTracklist();
+                      } else {
+                        setState(() => _showLyricsView = true);
+                      }
+                    },
+                    behavior: HitTestBehavior.opaque,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16.0),
+                      child: Center(
+                        child: Icon(
+                          _showLyricsView || _showTracklistView ? Icons.keyboard_arrow_down_rounded : Icons.keyboard_arrow_up_rounded,
+                          color: Colors.white.withOpacity(0.3),
+                          size: 40,
                         ),
                       ),
                     ),
@@ -2541,45 +2538,55 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              currentTitle,
-                              style: const TextStyle(
-                                fontSize: 21,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                                letterSpacing: -0.5,
-                              ),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              currentArtist,
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w400,
-                                color: Colors.white.withOpacity(0.7),
-                                letterSpacing: -0.2,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            const SizedBox(height: 6),
-                            if (currentAlbumName.isNotEmpty)
+                        child: GestureDetector(
+                          onTap: () {
+                            if (_showLyricsView || _showTracklistView) {
+                              _closeLyricsOrTracklist();
+                            } else if (currentTitle != 'Sin canción') {
+                              setState(() => _showLyricsView = true);
+                            }
+                          },
+                          behavior: HitTestBehavior.opaque,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
                               Text(
-                                'From: "$currentAlbumName"',
+                                currentTitle,
+                                style: const TextStyle(
+                                  fontSize: 21,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                  letterSpacing: -0.5,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                currentArtist,
                                 style: TextStyle(
-                                  fontSize: 13,
+                                  fontSize: 16,
                                   fontWeight: FontWeight.w400,
-                                  color: Colors.white.withOpacity(0.45),
+                                  color: Colors.white.withOpacity(0.7),
+                                  letterSpacing: -0.2,
                                 ),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
-                          ],
+                              const SizedBox(height: 6),
+                              if (currentAlbumName.isNotEmpty)
+                                Text(
+                                  'From: "$currentAlbumName"',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w400,
+                                    color: Colors.white.withOpacity(0.45),
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                            ],
+                          ),
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -2699,45 +2706,14 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 36.0, vertical: 12.0),
-                  child: Row(
-                    children: [
-                      Icon(Icons.volume_down_rounded,
-                          color: Colors.white.withOpacity(0.5), size: 18),
-                      Expanded(
-                        child: SliderTheme(
-                          data: SliderThemeData(
-                            trackHeight: 3,
-                            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                            activeTrackColor: Colors.white.withOpacity(0.85),
-                            inactiveTrackColor: Colors.white.withOpacity(0.2),
-                            thumbColor: Colors.white,
-                          ),
-                          child: Slider(
-                            value: _volume,
-                            onChanged: (val) {
-                              setState(() {
-                                _volume = val;
-                                _audioPlayer.setVolume(_volume);
-                              });
-                            },
-                          ),
-                        ),
-                      ),
-                      Icon(Icons.volume_up_rounded,
-                          color: Colors.white.withOpacity(0.5), size: 18),
-                    ],
-                  ),
-                ),
               ],
             ),
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 }
 
 // ---------------------------------------------------------
@@ -2746,11 +2722,17 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
 class AlbumGridScreen extends StatelessWidget {
   final List<AlbumModel> albums;
   final Function(int) onAlbumTap;
+  final MusicFolderService musicFolderService;
+  final VoidCallback onAddFolder;
+  final Function(File) onDownloadComplete;
 
   const AlbumGridScreen({
     super.key,
     required this.albums,
     required this.onAlbumTap,
+    required this.musicFolderService,
+    required this.onAddFolder,
+    required this.onDownloadComplete,
   });
 
   Widget _buildGridImage(String imageSource) {
@@ -2787,6 +2769,29 @@ class AlbumGridScreen extends StatelessWidget {
           icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 20),
           onPressed: () => Navigator.pop(context),
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.download_rounded, color: Colors.white, size: 24),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => FlacWebBrowserScreen(
+                    musicFolderService: musicFolderService,
+                    onDownloadComplete: (flacFile) => onDownloadComplete(flacFile),
+                  ),
+                ),
+              );
+            },
+            tooltip: 'Navegar a Flac Downloader Web',
+          ),
+          IconButton(
+            icon: const Icon(Icons.add_circle_outline_rounded, color: Colors.white, size: 24),
+            onPressed: onAddFolder,
+            tooltip: 'Vincular carpeta de música',
+          ),
+          const SizedBox(width: 8),
+        ],
       ),
       body: albums.isEmpty
           ? const Center(
@@ -3003,7 +3008,7 @@ class _LyricsBottomSheetState extends State<LyricsBottomSheet> {
 // ---------------------------------------------------------
 class TracklistView extends StatelessWidget {
   final AlbumModel album;
-  final int currentPlayingAlbumIndex;
+  final bool isCurrentAlbum;
   final int currentSongInAlbumIndex;
   final bool isPlaying;
   final Function(int) onSongTap;
@@ -3014,7 +3019,7 @@ class TracklistView extends StatelessWidget {
   const TracklistView({
     super.key,
     required this.album,
-    required this.currentPlayingAlbumIndex,
+    required this.isCurrentAlbum,
     required this.currentSongInAlbumIndex,
     required this.isPlaying,
     required this.onSongTap,
@@ -3032,8 +3037,11 @@ class TracklistView extends StatelessWidget {
       ),
       child: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.all(16.0),
+          GestureDetector(
+            onTap: onClose,
+            behavior: HitTestBehavior.opaque,
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
             child: Row(
               children: [
                 ClipRRect(
@@ -3086,6 +3094,7 @@ class TracklistView extends StatelessWidget {
               ],
             ),
           ),
+        ),
           const Divider(height: 1, color: Colors.white10),
           Expanded(
             child: ListView.builder(
@@ -3094,7 +3103,7 @@ class TracklistView extends StatelessWidget {
               itemBuilder: (context, idx) {
                 final song = album.songs[idx];
                 // Comprobamos si es la canción que suena
-                final bool isSelected = (album.title.toLowerCase() == (song['album'] ?? '').toString().toLowerCase()) && currentSongInAlbumIndex == idx;
+                final bool isSelected = isCurrentAlbum && currentSongInAlbumIndex == idx;
                 final int trackNum = song['track'] ?? (idx + 1);
 
                 return ListTile(

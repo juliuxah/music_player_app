@@ -236,5 +236,25 @@ class MusicFolderService {
     onStatusChanged?.call('Limpiada');
   }
 
+  /// Selecciona archivos de música directamente (para iOS)
+  Future<List<String>> selectMusicFiles() async {
+    try {
+      debugPrint('═══════ SELECCIONAR ARCHIVOS (iOS) ═══════');
+      final result = await FilePicker.pickFiles(
+        allowMultiple: true,
+        type: FileType.audio,
+      );
+
+      if (result != null && result.isNotEmpty) {
+        final paths = result.map((file) => file.path).whereType<String>().toList();
+        debugPrint('✅ Archivos seleccionados: ${paths.length}');
+        return paths;
+      }
+    } catch (e) {
+      debugPrint('❌ Error en selectMusicFiles: $e');
+    }
+    return [];
+  }
+
   bool hasMusicFolderConfigured() => _currentFolderPath != null;
 }
