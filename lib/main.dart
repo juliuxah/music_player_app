@@ -21,24 +21,19 @@ import 'update_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'services/flac_metadata_reader.dart';
 import 'debug_logger.dart';
-
 import 'music_folder_service.dart';
 
-
-
 late MyAudioHandler audioHandler;
-bool _tagLibSupported = true; // Control global de soporte nativo
+bool _tagLibSupported = true;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // ✨ NUEVO: Inicializar Debug Logger
   DebugLogger.log('🚀 ═══════════════════════════════════════');
   await DebugLogger.init();
   DebugLogger.logSuccess('Main', 'Iniciando aplicación BIN Music');
   DebugLogger.logData('Main', 'Plataforma', Platform.operatingSystem);
 
-  // Configurar AudioSession para iOS / Android
   try {
     final session = await AudioSession.instance;
     await session.configure(const AudioSessionConfiguration.music());
@@ -48,7 +43,6 @@ Future<void> main() async {
     DebugLogger.logError('AudioSession', 'Error configurando', e);
   }
 
-  // Limpiar cookies
   try {
     CookieManager cookieManager = CookieManager.instance();
     await cookieManager.deleteAllCookies();
@@ -57,14 +51,17 @@ Future<void> main() async {
     DebugLogger.logError('CookieManager', 'Error limpiando cookies', e);
   }
 
-  // Inicializar audio service
   try {
     audioHandler = await AudioService.init(
       builder: () => MyAudioHandler(),
       config: const AudioServiceConfig(
         androidNotificationChannelId: 'com.example.music_player_app.audio',
         androidNotificationChannelName: 'Reproductor de Música',
-        androidNotificationOngoing: true,
+        // 🌟 DEBE ser false para poder usar androidStopForegroundOnPause: false
+        androidNotificationOngoing: false,
+        // 🌟 VITAL: evita que el sistema mate el servicio en segundo plano al pausar
+        androidStopForegroundOnPause: false,
+        preloadArtwork: true, // Mejora la carga de portadas en la notificación nativa
       ),
     );
     DebugLogger.logSuccess('AudioService', 'Inicializado correctamente');
@@ -77,10 +74,14 @@ Future<void> main() async {
 }
 
 // ---------------------------------------------------------
-// MANEJADOR DE AUDIO
+// MANEJADOR DE AUDIO (Optimizado para Background y Sync)
 // ---------------------------------------------------------
 
 enum AudioSourceType { file, asset, network }
+
+// ---------------------------------------------------------
+// MANEJADOR DE AUDIO (Corregido para barra de progreso nativa)
+// ---------------------------------------------------------
 
 class MyAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   final AudioPlayer _player = AudioPlayer();
@@ -90,25 +91,57 @@ class MyAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   }
 
   void _initAudioPlayerStreams() {
+    // 1. Sincronizar estado de reproducción (play/pause/buffering)
+    // Usamos event.updateTime para que la barra de progreso del sistema funcione correctamente
     _player.playbackEventStream.map(_transformEvent).pipe(playbackState);
 
-    // Escuchar cambios en la duración para actualizar el MediaItem dinámicamente
+    // 2. Sincronizar el MediaItem (notificación nativa) cuando cambia la canción
+    _player.currentIndexStream.listen((index) {
+      if (index != null) {
+        final currentQueue = queue.value;
+        if (currentQueue != null && index >= 0 && index < currentQueue.length) {
+          final newItem = currentQueue[index];
+          final oldItem = mediaItem.value;
+
+          // Preservamos la duración si ya la conocemos, o la obtenemos del reproductor
+          final knownDuration = (oldItem?.id == newItem.id)
+              ? oldItem?.duration
+              : _player.duration;
+
+          mediaItem.add(newItem.copyWith(duration: knownDuration));
+        }
+      }
+    });
+
+    // 3. Actualizar la duración en cuanto el reproductor la descubra
     _player.durationStream.listen((d) {
       if (d != null && mediaItem.value != null) {
         mediaItem.add(mediaItem.value!.copyWith(duration: d));
       }
     });
-
-    _player.processingStateStream.listen((state) {
-      if (state == ProcessingState.completed) {
-        _onSongCompleted?.call();
-      }
-    });
   }
 
-  static VoidCallback? _onSongCompleted;
-  static set onSongCompleted(VoidCallback callback) {
-    _onSongCompleted = callback;
+  Future<void> setFullQueue({
+    required List<MediaItem> queueItems,
+    required ConcatenatingAudioSource playlist,
+    int initialIndex = 0,
+  }) async {
+    try {
+      queue.add(queueItems);
+
+      await _player.setAudioSource(
+        playlist,
+        initialIndex: initialIndex,
+        initialPosition: Duration.zero,
+      );
+
+      if (initialIndex >= 0 && initialIndex < queueItems.length) {
+        // Actualizamos con la duración si el reproductor ya la pudo leer instantáneamente
+        mediaItem.add(queueItems[initialIndex].copyWith(duration: _player.duration));
+      }
+    } catch (e) {
+      DebugLogger.logError('AudioService', 'Error al establecer la cola', e);
+    }
   }
 
   AudioPlayer get player => _player;
@@ -122,7 +155,7 @@ class MyAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
         MediaControl.stop,
       ],
       systemActions: const {
-        MediaAction.seek,
+        MediaAction.seek, // Vital para que aparezca la barra de progreso
         MediaAction.seekForward,
         MediaAction.seekBackward,
         MediaAction.skipToNext,
@@ -140,8 +173,9 @@ class MyAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
       updatePosition: _player.position,
       bufferedPosition: _player.bufferedPosition,
       speed: _player.speed,
-      queueIndex: 0,
-      updateTime: DateTime.now(), // Asegura que iOS sincronice el tiempo actual
+      queueIndex: event.currentIndex,
+      // 🌟 CORRECCIÓN CLAVE: Usar el tiempo del evento, no DateTime.now()
+      updateTime: event.updateTime,
     );
   }
 
@@ -161,53 +195,14 @@ class MyAudioHandler extends BaseAudioHandler with QueueHandler, SeekHandler {
   Future<void> skipToPrevious() => _player.seekToPrevious();
 
   @override
-  Future<void> stop() async {
-    await _player.stop();
+  Future<void> skipToQueueItem(int index) async {
+    await _player.seek(Duration.zero, index: index);
   }
 
-  void updateCurrentMetadata({
-    required String title,
-    required String artist,
-    required String artUri,
-    required String album,
-    required String filePath,
-    Duration? duration,
-  }) {
-    // BLINDAJE: Metadatos nunca vacíos para evitar crash en MediaSession nativo
-    final String safeTitle = title.trim().isEmpty ? 'Canción desconocida' : title.trim();
-    final String safeArtist = artist.trim().isEmpty ? 'Artista desconocido' : artist.trim();
-    final String safeAlbum = album.trim().isEmpty ? 'Álbum desconocido' : album.trim();
-
-    Uri? safeArtUri;
-    try {
-      if (artUri.isNotEmpty) {
-        if (artUri.startsWith('http')) {
-          safeArtUri = Uri.parse(artUri);
-        } else {
-          // Validar que el archivo de imagen existe antes de enviarlo a la notificación
-          if (File(artUri).existsSync()) {
-            safeArtUri = Uri.file(artUri);
-          }
-        }
-      }
-    } catch (e) {
-      DebugLogger.log('⚠️ Error al parsear artUri: $e');
-    }
-
-    mediaItem.add(MediaItem(
-      id: filePath,
-      album: safeAlbum,
-      title: safeTitle,
-      artist: safeArtist,
-      duration: duration,
-      artUri: safeArtUri,
-      // Campos extra para máxima compatibilidad con Android 7
-      displayTitle: safeTitle,
-      displaySubtitle: safeArtist,
-      displayDescription: safeAlbum,
-    ));
-
-    DebugLogger.logSuccess('AudioHandler', '✅ Metadatos actualizados correctamente');
+  @override
+  Future<void> stop() async {
+    await _player.stop();
+    await super.stop();
   }
 }
 
@@ -223,12 +218,10 @@ class FlacDownloadService {
     Directory? tempFolder;
     try {
       Directory musicFolder;
-      // En iOS SIEMPRE usamos la carpeta interna de documentos de la app
       if (Platform.isIOS || customDestinationDir == null) {
         final appDocDir = await getApplicationDocumentsDirectory();
         musicFolder = Directory(p.join(appDocDir.path, 'MusicLibrary'));
       } else {
-        // En Android podemos usar la carpeta vinculada
         musicFolder = Directory(p.join(customDestinationDir, 'flacDownloader'));
       }
 
@@ -244,11 +237,10 @@ class FlacDownloadService {
 
       DebugLogger.log('Analizando archivo: ${tempFile.path} (Tamaño: ${await tempFile.length()} bytes)');
 
-      // VERIFICACIÓN DE HEADER (Magic Numbers)
       try {
         final header = await tempFile.openRead(0, 4).first;
         final headerHex = header.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
-        final isFlac = headerHex == '66 4c 61 43'; // "fLaC"
+        final isFlac = headerHex == '66 4c 61 43';
         DebugLogger.log('Header del archivo: $headerHex (¿Es FLAC válido?: $isFlac)');
       } catch (e) {
         DebugLogger.log('Error leyendo header: $e');
@@ -290,7 +282,6 @@ class FlacDownloadService {
       String title = 'track';
       String artist = '';
 
-      // DETECCIÓN DINÁMICA DE EXTENSIÓN
       String extension = '.flac';
       try {
         final header = await File(targetFilePath!).openRead(0, 4).first;
@@ -312,13 +303,11 @@ class FlacDownloadService {
         artist = metadata['artist'] ?? '';
       } catch (_) {}
 
-      // Limpiar nombres de caracteres no permitidos
       String safeTitle = title.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_').trim();
       String safeArtist = artist.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_').trim();
 
       String finalFileName = safeArtist.isNotEmpty ? '$safeTitle - $safeArtist$extension' : '$safeTitle$extension';
 
-      // Evitar colisiones
       String finalDestinationPath = p.join(musicFolder.path, finalFileName);
       int counter = 1;
       while (await File(finalDestinationPath).exists()) {
@@ -329,7 +318,6 @@ class FlacDownloadService {
         counter++;
       }
 
-      // USO DE COPY
       DebugLogger.log('Copiando archivo a: $finalDestinationPath');
       final File finalAudioFile = await File(targetFilePath).copy(finalDestinationPath);
       DebugLogger.log('Copia completada con éxito');
@@ -381,22 +369,18 @@ class LyricsService {
     required String albumName,
     int? durationSeconds,
   }) async {
-    // Intentar con Servicio 1: LRCLib (Coincidencia exacta)
     final syncedLrc1 = await _fetchFromLRCLibExact(trackName, artistName, albumName, durationSeconds);
     if (syncedLrc1 != null) return syncedLrc1;
 
-    // Intentar con Servicio 2: LRCLib (Búsqueda general)
     final syncedLrc2 = await _fetchFromLRCLibSearch(trackName, artistName);
     if (syncedLrc2 != null) return syncedLrc2;
 
-    // Intentar con Servicio 3: Textyl API (Sincronización alternativa)
     final syncedLrc3 = await _fetchFromTextyl(trackName, artistName);
     if (syncedLrc3 != null) return syncedLrc3;
 
     return null;
   }
 
-  // --- SERVICIO 1: LRCLib Exact Match ---
   static Future<List<LrcLine>?> _fetchFromLRCLibExact(String track, String artist, String album, int? duration) async {
     try {
       final query = 'track_name=${Uri.encodeComponent(track)}'
@@ -413,7 +397,6 @@ class LyricsService {
     return null;
   }
 
-  // --- SERVICIO 2: LRCLib Search ---
   static Future<List<LrcLine>?> _fetchFromLRCLibSearch(String track, String artist) async {
     try {
       final url = Uri.parse('https://lrclib.net/api/search?q=${Uri.encodeComponent("$track $artist")}');
@@ -430,15 +413,12 @@ class LyricsService {
     return null;
   }
 
-  // --- SERVICIO 3: Textyl API (Fallback) ---
   static Future<List<LrcLine>?> _fetchFromTextyl(String track, String artist) async {
     try {
-      // Textyl es otro proveedor gratuito de letras sincronizadas
       final url = Uri.parse('https://api.textyl.co/api/lyrics?q=${Uri.encodeComponent("$track $artist")}');
       final response = await http.get(url).timeout(const Duration(seconds: 3));
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
-        // Textyl devuelve JSON con timestamps, lo convertimos a nuestro formato
         final List<LrcLine> lines = [];
         for (var item in data) {
           final seconds = (item['seconds'] as num).toDouble();
@@ -536,7 +516,7 @@ class _FlacWebBrowserScreenState extends State<FlacWebBrowserScreen> {
             if (this.status == 200) {
               var buffer = this.response;
               var byteArray = new Uint8Array(buffer);
-              var chunkSize = 1024 * 512; // 512KB chunks para no saturar el canal
+              var chunkSize = 1024 * 512;
               var totalChunks = Math.ceil(byteArray.length / chunkSize);
               
               window.flutter_inappwebview.callHandler('onBlobStart', {
@@ -559,7 +539,6 @@ class _FlacWebBrowserScreenState extends State<FlacWebBrowserScreen> {
                   chunk: chunk
                 });
 
-                // Pequeño retardo para dejar respirar a la UI en dispositivos lentos
                 setTimeout(function() {
                   sendNextChunk(index + 1);
                 }, 10);
@@ -614,7 +593,6 @@ class _FlacWebBrowserScreenState extends State<FlacWebBrowserScreen> {
         },
       );
 
-      // Limpieza del archivo temporal de streaming
       if (_tempDownloadFile != null && await _tempDownloadFile!.exists()) {
         await _tempDownloadFile!.delete();
       }
@@ -707,7 +685,6 @@ class _FlacWebBrowserScreenState extends State<FlacWebBrowserScreen> {
                     final data = args[0] as Map;
                     final List<dynamic> chunkList = data['chunk'] as List<dynamic>;
                     final uint8chunk = Uint8List.fromList(chunkList.cast<int>());
-                    // DebugLogger.log('Recibido chunk: ${uint8chunk.length} bytes');
                     _downloadSink?.add(uint8chunk);
                   }
                 },
@@ -963,9 +940,7 @@ class AlbumCollectionScreen extends StatefulWidget {
 }
 
 class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with WidgetsBindingObserver {
-
   MediaItem? _currentMediaItem;
-
   late final PageController _pageController;
   final GlobalKey _shareCardKey = GlobalKey();
 
@@ -995,30 +970,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
 
     _audioPlayer.setVolume(1.0);
 
-    // Escuchar el cambio de índice nativo (funciona perfecto en segundo plano en iOS)
-    _audioPlayer.currentIndexStream.listen((index) {
-      if (index != null &&
-          _currentPlayingAlbumIndex != -1 &&
-          _currentPlayingAlbumIndex < albumList.length) {
-        final album = albumList[_currentPlayingAlbumIndex];
-        if (index < album.songs.length) {
-          final song = album.songs[index];
-          setState(() {
-            _currentSongInAlbumIndex = index;
-            _currentAudioPath = song['filePath'];
-          });
-
-          audioHandler.updateCurrentMetadata(
-            title: song['title'] ?? 'Sin título',
-            artist: song['artist'] ?? album.artist,
-            artUri: album.image,
-            album: album.title,
-            filePath: song['filePath'] ?? '',
-          );
-        }
-      }
-    });
-
     _audioPlayer.durationStream.listen((d) {
       if (mounted) setState(() => _duration = d ?? Duration.zero);
     });
@@ -1031,18 +982,10 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
 
     _audioPlayer.playerStateStream.listen((state) {
       if (mounted) {
-        setState(() {
-          _isPlaying = state.playing;
-        });
-      }
-
-      // Detectar el fin de la cola nativa
-      if (state.processingState == ProcessingState.completed) {
-        _playNextAlbum();
+        setState(() => _isPlaying = state.playing);
       }
     });
 
-    // --- Configurar el servicio de carpeta ---
     widget.musicFolderService.onFolderChanged = (added, removed) {
       _handleFolderChanges(added, removed);
     };
@@ -1058,14 +1001,12 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
       _saveAlbumsToPrefs();
     };
 
-    // Escaneo inicial si ya hay una carpeta
     final currentFolder = widget.musicFolderService.getCurrentMusicFolder();
     if (currentFolder != null) {
       widget.musicFolderService.scanMusicFolder().then((files) {
         if (files.isNotEmpty) _loadMusicFilesFromFolder(files);
       });
     }
-    // ------------------------------------------
 
     _initAppStartup();
 
@@ -1073,6 +1014,7 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
       _resumePlaybackIfNeeded();
     });
 
+    // 🌟 Escuchar cambios en el media item para actualizar la UI cuando cambia en segundo plano
     audioHandler.mediaItem.listen((mediaItem) {
       if (mediaItem == null || !mounted) return;
       _currentMediaItem = mediaItem;
@@ -1092,7 +1034,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
             _currentAudioPath = song['filePath'];
           });
 
-          // Mover el PageView al álbum que está sonando actualmente
           if (_pageController.hasClients && _getCurrentPageIndex() != albumIdx) {
             _pageController.animateToPage(
               albumIdx,
@@ -1116,7 +1057,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // Sincronizar UI con la reproducción activa
       if (audioHandler.mediaItem.value != null) {
         _updateCurrentSongFromMediaItem(audioHandler.mediaItem.value!);
       }
@@ -1130,46 +1070,12 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
           _audioPlayer.play();
           setState(() => _isPlaying = true);
         } else {
-          _playSongInAlbum(_currentPlayingAlbumIndex, _currentSongInAlbumIndex);
+          _playSong(_currentPlayingAlbumIndex, _currentSongInAlbumIndex);
         }
       }
     }
   }
 
-  // Variable de bandera a nivel de clase para evitar que se dispare múltiples veces
-  bool _isTransitioningAlbum = false;
-
-  Future<void> _playNextAlbum() async {
-    if (albumList.isEmpty || _currentPlayingAlbumIndex == -1) return;
-    if (_isTransitioningAlbum) return; // Evitar ejecuciones duplicadas
-
-    _isTransitioningAlbum = true;
-
-    try {
-      // 1. Detener explícitamente el reproductor para limpiar el decodificador (MediaCodec)
-      await _audioPlayer.stop();
-
-      // 2. Darle un pequeñísimo respiro al hilo principal para que el GC de Android actúe
-      // sin interrumpir el nuevo audio (evita el "trabón")
-      await Future.delayed(const Duration(milliseconds: 300));
-
-      int nextAlbumIndex = _currentPlayingAlbumIndex + 1;
-
-      if (nextAlbumIndex >= albumList.length) {
-        nextAlbumIndex = 0;
-      }
-
-      if (albumList[nextAlbumIndex].songs.isNotEmpty) {
-        await _playSongInAlbum(nextAlbumIndex, 0);
-      }
-    } finally {
-      _isTransitioningAlbum = false;
-    }
-  }
-
-  // ------------------------------------------------------------
-  // Métodos existentes (todos implementados)
-  // ------------------------------------------------------------
   Future<void> _initAppStartup() async {
     await _loadSavedAlbums();
     await _scanAssetsForMusic();
@@ -1178,7 +1084,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
 
   Future<void> _scanAssetsForMusic() async {
     try {
-      // Usar la API moderna de AssetManifest para evitar errores en versiones recientes de Flutter
       final manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
       final audioPaths = manifest.listAssets()
           .where((String key) => key.startsWith('assets/audios/'))
@@ -1195,7 +1100,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
 
       bool importedAny = false;
       for (String path in audioPaths) {
-        // Verificar si ya existe
         bool exists = false;
         for (var album in albumList) {
           if (album.songs.any((s) => s['filePath'] == path)) {
@@ -1254,7 +1158,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
         final path = song['filePath'] ?? '';
         final sourceTypeName = song['sourceType'] as String?;
 
-        // Los assets y URLs de red no se consideran huérfanos por falta de archivo local
         if (sourceTypeName == AudioSourceType.asset.name || sourceTypeName == AudioSourceType.network.name) {
           return false;
         }
@@ -1284,14 +1187,11 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
     }
   }
 
-  // ========== MÉTODO GENÉRICO PARA AGREGAR ARCHIVOS ==========
-  /// Agrega un archivo de música a la biblioteca (genérico para cualquier formato)
   Future<void> _addFlacOrMusicFile(String filePath, {AudioSourceType sourceType = AudioSourceType.file, bool updateState = true}) async {
     if (sourceType == AudioSourceType.file && !File(filePath).existsSync()) {
       debugPrint('Archivo no encontrado: $filePath');
       return;
     }
-    // ... (resto del procesamiento inicial)
 
     String title = p.basenameWithoutExtension(filePath);
     String artist = 'Artista Desconocido';
@@ -1375,12 +1275,9 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
     }
   }
 
-  // ========== MÉTODOS PARA GESTOR DE CARPETA ==========
-  /// Cargar archivos de música desde la carpeta seleccionada
   Future<void> _loadMusicFilesFromFolder(List<String> filePaths) async {
     int count = 0;
     for (String filePath in filePaths) {
-      // Verificar si ya existe la canción en la biblioteca
       bool exists = false;
       for (var album in albumList) {
         if (album.songs.any((s) => s['filePath'] == filePath)) {
@@ -1394,10 +1291,9 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
           await _addFlacOrMusicFile(filePath, updateState: false);
           count++;
 
-          // Cada 5 archivos, le damos un respiro a la UI
           if (count % 5 == 0) {
             await Future.delayed(Duration.zero);
-            setState(() {}); // Actualización parcial para mostrar progreso
+            setState(() {});
           }
         } catch (e) {
           debugPrint('Error cargando archivo $filePath: $e');
@@ -1411,9 +1307,7 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
     }
   }
 
-  /// Manejar cambios en la carpeta (archivos agregados o removidos)
   Future<void> _handleFolderChanges(List<String> addedFiles, List<String> removedFiles) async {
-    // Manejar archivos removidos
     for (String removedPath in removedFiles) {
       int albumIndexToRemove = -1;
       int songIndexToRemove = -1;
@@ -1433,11 +1327,9 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
         setState(() {
           albumList[albumIndexToRemove].songs.removeAt(songIndexToRemove);
 
-          // Si el álbum quedó sin canciones, eliminarlo
           if (albumList[albumIndexToRemove].songs.isEmpty) {
             albumList.removeAt(albumIndexToRemove);
 
-            // Ajustar índice de reproducción si es necesario
             if (_currentPlayingAlbumIndex == albumIndexToRemove) {
               _audioPlayer.stop();
               _currentPlayingAlbumIndex = -1;
@@ -1451,11 +1343,9 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
       }
     }
 
-    // Manejar archivos agregados
     for (String addedPath in addedFiles) {
       if (!File(addedPath).existsSync()) continue;
 
-      // Verificar si ya existe
       bool exists = false;
       for (var album in albumList) {
         if (album.songs.any((s) => s['filePath'] == addedPath)) {
@@ -1475,7 +1365,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
 
     await _saveAlbumsToPrefs();
   }
-  // ====================================================
 
   Future<void> _deleteSong(int albumIndex, int songIndex) async {
     final song = albumList[albumIndex].songs[songIndex];
@@ -1601,13 +1490,11 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
     final String cleanAlbumName = normData['name'];
     final int discNumber = normData['disc'];
 
-    // 🎵 Si no tiene track number, asignarle el siguiente disponible en el álbum
     int existingAlbumIndex = albumList.indexWhere((a) {
       return a.title.toLowerCase() == cleanAlbumName.toLowerCase();
     });
 
     if (trackNumber == 0 && existingAlbumIndex != -1) {
-      // Encontrar el track number más alto y asignar el siguiente
       final maxTrack = albumList[existingAlbumIndex].songs
           .fold<int>(0, (max, song) {
         final t = song['track'] as int? ?? 0;
@@ -1615,7 +1502,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
       });
       trackNumber = maxTrack + 1;
     } else if (trackNumber == 0) {
-      // Si es un álbum nuevo, empezar con track 1
       trackNumber = 1;
     }
 
@@ -1636,7 +1522,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
         if (!exists) {
           albumList[existingAlbumIndex].songs.add(songData);
         }
-        // Ordenar SIEMPRE, incluso si ya existía el álbum
         albumList[existingAlbumIndex].songs.sort((a, b) {
           final discA = a['disc'] as int? ?? 1;
           final discB = b['disc'] as int? ?? 1;
@@ -1668,7 +1553,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
     }
 
     if (Platform.isIOS) {
-      // En iOS, selección manual de archivos (soporta selección múltiple)
       final files = await widget.musicFolderService.selectMusicFiles();
       if (files.isNotEmpty) {
         await _loadMusicFilesFromFolder(files);
@@ -1681,7 +1565,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
       return;
     }
 
-    // En Android, seguimos con el flujo de carpeta vinculada e importación automática
     final selectedPath = await widget.musicFolderService.selectMusicFolder();
     if (selectedPath != null) {
       final files = await widget.musicFolderService.scanMusicFolder();
@@ -1694,135 +1577,100 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
     }
   }
 
-  Future<void> _playSongInAlbum(int albumIndex, int songIndex) async {
+  // 🌟 MÉTODO UNIFICADO DE REPRODUCCIÓN (Construye la cola global)
+  Future<void> _playSong(int albumIndex, int songIndex) async {
     if (albumList.isEmpty) return;
+    if (albumIndex < 0 || albumIndex >= albumList.length) return;
+    if (songIndex < 0 || songIndex >= albumList[albumIndex].songs.length) return;
 
     try {
-      if (albumIndex < 0 || albumIndex >= albumList.length) return;
-      var album = albumList[albumIndex];
+      final List<MediaItem> allMediaItems = [];
+      final List<AudioSource> allAudioSources = [];
+      int targetGlobalIndex = 0;
 
-      if (album.songs.isEmpty) return;
-      if (songIndex < 0 || songIndex >= album.songs.length) return;
+      // Construir cola global de TODOS los álbumes y canciones
+      for (int a = 0; a < albumList.length; a++) {
+        final album = albumList[a];
+        for (int s = 0; s < album.songs.length; s++) {
+          final song = album.songs[s];
+          final path = song['filePath'] ?? '';
+          final sourceType = song['sourceType'] as String?;
 
-      final song = album.songs[songIndex];
-      String path = song['filePath'] ?? '';
-      String songTitle = song['title'] ?? 'Sin título';
-      String songArtist = song['artist'] ?? 'Artista desconocido';
-
-      DebugLogger.log('▶️ Intentando reproducir: $songTitle (Path: $path)');
-
-      // 1. Crear AudioSource ANTES de actualizar UI/Metadatos para evitar lag
-      final playlist = ConcatenatingAudioSource(
-        useLazyPreparation: true,
-        children: album.songs.map((s) {
-          final sPath = s['filePath'] ?? '';
-          final sType = s['sourceType'] as String?;
-
-          if (sType == AudioSourceType.asset.name) {
-            return AudioSource.asset(sPath);
-          } else if (sType == AudioSourceType.network.name) {
-            return AudioSource.uri(Uri.parse(sPath));
-          } else {
-            return AudioSource.uri(Uri.file(sPath));
+          if (a == albumIndex && s == songIndex) {
+            targetGlobalIndex = allMediaItems.length;
           }
-        }).toList(),
-      );
 
-      // Asegurar que la sesión de audio esté activa
-      await AudioSession.instance.then((s) => s.setActive(true));
+          AudioSource source;
+          if (sourceType == AudioSourceType.asset.name) {
+            source = AudioSource.asset(path);
+          } else if (sourceType == AudioSourceType.network.name) {
+            source = AudioSource.uri(Uri.parse(path));
+          } else {
+            source = AudioSource.uri(Uri.file(path));
+          }
+          allAudioSources.add(source);
 
-      // 2. Establecer AudioSource (Aquí es donde ocurría el crash por falta de decodificador)
-      DebugLogger.log('Cargando AudioSource (Usando ExoPlayer FLAC Extension)...');
-      try {
-        await _audioPlayer.setAudioSource(
-          playlist,
-          initialIndex: songIndex,
-          initialPosition: Duration.zero,
-        );
-      } catch (e) {
-        DebugLogger.logError('AudioPlayer', 'Error crítico al cargar fuente', e);
-        // Si falla la playlist, intentar carga individual como último recurso
-        await _audioPlayer.setAudioSource(
-          AudioSource.uri(Uri.file(path)),
-          initialPosition: Duration.zero,
-        );
+          allMediaItems.add(MediaItem(
+            id: path,
+            album: album.title,
+            title: song['title'] ?? 'Sin título',
+            artist: song['artist'] ?? album.artist,
+            artUri: Uri.parse(album.image.startsWith('http') ? album.image : 'file://${album.image}'),
+          ));
+        }
       }
 
-      // 3. ACTUALIZAR UI DESPUÉS de que el audio cargó con éxito
+      final playlist = ConcatenatingAudioSource(
+        useLazyPreparation: true, // Vital para rendimiento con muchas canciones
+        children: allAudioSources,
+      );
+
+      await AudioSession.instance.then((s) => s.setActive(true));
+
+      // Sincronizar just_audio + audio_service de una sola vez
+      await audioHandler.setFullQueue(
+        queueItems: allMediaItems,
+        playlist: playlist,
+        initialIndex: targetGlobalIndex,
+      );
+
       if (!mounted) return;
       setState(() {
         _currentPlayingAlbumIndex = albumIndex;
         _currentSongInAlbumIndex = songIndex;
-        _currentAudioPath = path;
+        _currentAudioPath = albumList[albumIndex].songs[songIndex]['filePath'];
         _position = Duration.zero;
         _isPlaying = false;
       });
 
-      audioHandler.updateCurrentMetadata(
-        title: songTitle,
-        artist: songArtist,
-        artUri: album.image,
-        album: album.title,
-        filePath: path,
-      );
-
-      DebugLogger.log('Iniciando play()...');
       await _audioPlayer.play();
 
       if (mounted) {
-        setState(() {
-          _isPlaying = _audioPlayer.playing;
-        });
+        setState(() => _isPlaying = _audioPlayer.playing);
       }
     } catch (e, stack) {
-      DebugLogger.log('❌ Error al reproducir audio: $e\n$stack');
+      DebugLogger.logError('AudioPlayer', 'Error al reproducir', e);
+      DebugLogger.log('Stack: $stack');
       if (mounted) {
         setState(() => _isPlaying = false);
       }
     }
   }
 
-
-
+  // 🌟 Delegamos la navegación a audio_service (nativo y seguro en background)
   Future<void> _playPreviousSong() async {
-    if (albumList.isEmpty) return;
-
-    int currentAlbum =
-    _currentPlayingAlbumIndex != -1 ? _currentPlayingAlbumIndex : _getCurrentPageIndex();
-    int currentSong = _currentSongInAlbumIndex != -1 ? _currentSongInAlbumIndex : 0;
-
-    if (currentSong > 0) {
-      await _playSongInAlbum(currentAlbum, currentSong - 1);
-    } else if (currentAlbum > 0) {
-      int prevAlbum = currentAlbum - 1;
-      int lastSongInPrevAlbum = albumList[prevAlbum].songs.length - 1;
-      await _playSongInAlbum(prevAlbum, lastSongInPrevAlbum);
-    } else {
-      await _audioPlayer.seek(Duration.zero);
-    }
+    await audioHandler.skipToPrevious();
   }
 
   Future<void> _playNextSongManual() async {
-    if (albumList.isEmpty) return;
-
-    int currentAlbum =
-    _currentPlayingAlbumIndex != -1 ? _currentPlayingAlbumIndex : _getCurrentPageIndex();
-    int currentSong = _currentSongInAlbumIndex != -1 ? _currentSongInAlbumIndex : 0;
-
-    var album = albumList[currentAlbum];
-
-    if (currentSong < album.songs.length - 1) {
-      await _playSongInAlbum(currentAlbum, currentSong + 1);
-    } else if (currentAlbum < albumList.length - 1) {
-      await _playSongInAlbum(currentAlbum + 1, 0);
-    }
+    await audioHandler.skipToNext();
   }
 
   Future<void> _togglePlayPause() async {
     if (_currentAudioPath == null || _currentPlayingAlbumIndex == -1) {
       int page = _getCurrentPageIndex();
       if (albumList.isNotEmpty && albumList[page].songs.isNotEmpty) {
-        await _playSongInAlbum(page, 0);
+        await _playSong(page, 0);
       }
       return;
     }
@@ -1833,9 +1681,7 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
       await _audioPlayer.play();
     }
     if (mounted) {
-      setState(() {
-        _isPlaying = _audioPlayer.playing;
-      });
+      setState(() => _isPlaying = _audioPlayer.playing);
     }
   }
 
@@ -1846,14 +1692,12 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
     return _pageController.page?.round().clamp(0, albumList.isEmpty ? 0 : albumList.length - 1) ?? 0;
   }
 
-  /// Extrae el artista principal (el primero antes de una coma, feat, &, etc.)
   String _getMainArtist(String artist) {
     final regex = RegExp(r'[,;&]|feat\.?|with|(?<=\s)y(?=\s)', caseSensitive: false);
     String mainArtist = artist.split(regex).first.trim();
     return mainArtist.isEmpty ? artist : mainArtist;
   }
 
-  /// Normaliza el nombre del álbum y extrae el número de disco/lado
   Map<String, dynamic> _normalizeAlbumData(String albumName) {
     String cleanName = albumName.trim();
     final discRegex = RegExp(
@@ -1881,9 +1725,7 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
     return {'name': cleanName.isEmpty ? albumName : cleanName, 'disc': discNumber};
   }
 
-  /// 🔥 Función segura para extraer el número de track real de los metadatos con LOGS de depuración.
   int _parseTrackNumber(Map<dynamic, dynamic> metadata) {
-    // Buscar posibles claves devueltas por los lectores
     final keys = ['track', 'trackNumber', 'tracknumber', 'TRCK', 'track_number'];
     String? trackStr;
     String? foundKey;
@@ -1896,30 +1738,25 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
       }
     }
 
-    // LOG: Si no encontró nada, imprimimos qué claves SI venían en el archivo para saber cómo se llama
     if (trackStr == null || trackStr.trim().isEmpty) {
-      DebugLogger.logWarning('TrackParser', 'No se encontró número de pista. Claves disponibles en este archivo: ${metadata.keys}');
+      DebugLogger.logWarning('TrackParser', 'No se encontró número de pista. Claves disponibles: ${metadata.keys}');
       return 0;
     }
 
-    // LOG: Mostramos el valor crudo tal cual salió del archivo
     DebugLogger.logInfo('TrackParser', 'Encontrada clave "$foundKey" con el valor crudo: "$trackStr"');
 
     String t = trackStr.trim();
 
-    // Separar si tiene el formato "3/12" o "03/12"
     if (t.contains('/')) {
       t = t.split('/').first.trim();
-      DebugLogger.logInfo('TrackParser', 'Formato múltiple detectado. Valor extraído antes de la barra: "$t"');
+      DebugLogger.logInfo('TrackParser', 'Formato múltiple detectado. Valor extraído: "$t"');
     }
 
-    // Limpiar el string de cualquier letra u otros caracteres (ej: "Track 3" -> "3")
     t = t.replaceAll(RegExp(r'[^0-9]'), '');
-    DebugLogger.logInfo('TrackParser', 'Valor después de limpiar letras/símbolos: "$t"');
+    DebugLogger.logInfo('TrackParser', 'Valor después de limpiar: "$t"');
 
     int finalTrack = int.tryParse(t) ?? 0;
 
-    // LOG: Resultado final
     if (finalTrack == 0) {
       DebugLogger.logWarning('TrackParser', 'Fallo al convertir "$t" a número. Se asignó 0.');
     } else {
@@ -1988,7 +1825,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
       pageBuilder: (ctx, anim1, anim2) {
         return StatefulBuilder(
           builder: (context, setModalState) {
-            // Cargar color dominante si es el por defecto
             if (dominantColor.value == const Color(0xFF1F1C2C).value) {
               _getDominantColor(albumImage).then((color) {
                 if (color.value != dominantColor.value && ctx.mounted) {
@@ -2015,8 +1851,8 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
                           color: Colors.transparent,
                           child: RepaintBoundary(
                             key: _shareCardKey,
-                            child: ClipRRect( // <-- 1. AQUÍ AGREGAS EL CLIPRRECT
-                              borderRadius: BorderRadius.circular(28), // <-- 2. MISMO RADIO QUE LA TARJETA
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(28),
                               child: Container(
                                 width: double.infinity,
                                 padding: const EdgeInsets.all(24),
@@ -2248,8 +2084,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
     );
   }
 
-
-
   String _formatDuration(Duration duration) {
     String twoDigits(int n) => n.toString().padLeft(2, '0');
     final minutes = duration.inMinutes.remainder(60);
@@ -2378,10 +2212,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
 
   @override
   Widget build(BuildContext context) {
-    debugPrint('🎨 Renderizando AlbumCollectionScreen (Álbumes: ${albumList.length})');
-    // Determinar qué álbum mostrar en el fondo (background)
-    // Prioridad 1: El álbum que se está reproduciendo actualmente
-    // Prioridad 2: El álbum que se está visualizando en el carrusel
     int backgroundIndex = 0;
     if (_currentPlayingAlbumIndex != -1) {
       backgroundIndex = _currentPlayingAlbumIndex;
@@ -2391,7 +2221,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
 
     AlbumModel? activeAlbum = albumList.isNotEmpty ? albumList[backgroundIndex] : null;
 
-    // --- INICIO: LÓGICA MODIFICADA PARA MOSTRAR SOLO LA CANCIÓN EN REPRODUCCIÓN ---
     String currentTitle = 'Sin canción';
     String currentArtist = 'Desconocido';
     String currentAlbumName = '';
@@ -2407,7 +2236,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
       currentAlbumName = albumList[_currentPlayingAlbumIndex].title;
       currentImage = albumList[_currentPlayingAlbumIndex].image;
     }
-    // --- FIN: ya no se usan los datos del álbum activo ---
 
     final double maxDurationMs = _duration.inMilliseconds.toDouble();
     final double currentPositionMs = _isSeeking
@@ -2420,16 +2248,13 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
         onVerticalDragEnd: (details) {
           if (details.primaryVelocity == null) return;
 
-          // Deslizar hacia arriba (Cualquier movimiento < -50) para mostrar letras
           if (details.primaryVelocity! < -50) {
             if (!_showLyricsView && !_showTracklistView) {
               setState(() {
                 _showLyricsView = true;
               });
             }
-          }
-          // Deslizar hacia abajo (Cualquier movimiento > 50) para quitar letras y volver al álbum
-          else if (details.primaryVelocity! > 50) {
+          } else if (details.primaryVelocity! > 50) {
             _closeLyricsOrTracklist();
           }
         },
@@ -2483,7 +2308,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
                                       _showLyricsView = false;
                                       _showTracklistView = false;
                                     });
-                                    // Esperar a que el PageView se monte tras cerrar letras/lista
                                     WidgetsBinding.instance.addPostFrameCallback((_) {
                                       if (_pageController.hasClients) {
                                         _pageController.animateToPage(
@@ -2512,7 +2336,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
                       ],
                     ),
                   ),
-                  // ================================================
                   Expanded(
                     child: albumList.isEmpty
                         ? Center(
@@ -2569,13 +2392,12 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
                           currentSongInAlbumIndex: _currentSongInAlbumIndex,
                           isPlaying: _isPlaying,
                           onSongTap: (idx) async {
-                            await _playSongInAlbum(_selectedTracklistAlbumIndex, idx);
+                            await _playSong(_selectedTracklistAlbumIndex, idx);
                           },
                           onClose: () {
                             setState(() {
                               _showTracklistView = false;
                             });
-                            // Sincronizar carrusel
                             WidgetsBinding.instance.addPostFrameCallback((_) {
                               if (_pageController.hasClients) {
                                 _pageController.jumpToPage(_selectedTracklistAlbumIndex);
@@ -2666,7 +2488,6 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
                       ),
                     ),
                   ),
-                  // --- INDICADOR DE DIRECCIÓN (FLECHITA) ---
                   if (albumList.isNotEmpty && (currentTitle != 'Sin canción' || _showLyricsView || _showTracklistView))
                     GestureDetector(
                       onTap: () {
@@ -2784,8 +2605,7 @@ class _AlbumCollectionScreenState extends State<AlbumCollectionScreen> with Widg
                           child: Slider(
                             min: 0.0,
                             max: maxDurationMs > 0 ? maxDurationMs : 1.0,
-                            value: currentPositionMs.clamp(
-                                0.0, maxDurationMs > 0 ? maxDurationMs : 1.0),
+                            value: currentPositionMs.clamp(0.0, maxDurationMs > 0 ? maxDurationMs : 1.0),
                             onChangeStart: (value) {
                               setState(() {
                                 _isSeeking = true;
@@ -2941,7 +2761,7 @@ class _AlbumGridScreenState extends State<AlbumGridScreen> {
                     musicFolderService: widget.musicFolderService,
                     onDownloadComplete: (flacFile) async {
                       await widget.onDownloadComplete(flacFile);
-                      if (mounted) setState(() {}); // Forzar actualización de la grilla
+                      if (mounted) setState(() {});
                     },
                   ),
                 ),
@@ -3266,7 +3086,6 @@ class TracklistView extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: 20),
               itemBuilder: (context, idx) {
                 final song = album.songs[idx];
-                // Comprobamos si es la canción que suena
                 final bool isSelected = isCurrentAlbum && currentSongInAlbumIndex == idx;
                 final int trackNum = song['track'] ?? (idx + 1);
 

@@ -23,6 +23,10 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("debug")
+
+            // 🌟 CLAVE: Desactivar R8/ProGuard para evitar que borre decodificadores de audio
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }

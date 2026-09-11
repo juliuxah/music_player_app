@@ -25,6 +25,7 @@
         android:preserveLegacyExternalStorage="true"
         android:usesCleartextTraffic="true"
         android:allowBackup="true">
+        android:extractNativeLibs="true">
 
         <activity
             android:name=".MainActivity"
@@ -69,7 +70,12 @@
         </receiver>
 
         <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="false" />
+
+        <meta-data
             android:name="flutterEmbedding"
+            android:value="2" />
             android:value="2" />
     </application>
 
